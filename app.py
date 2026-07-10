@@ -1,48 +1,44 @@
+import os
+import sys
+import time
+import random
+import string
+import threading
+import requests
 from flask import Flask, render_template, Response, jsonify
-from playwright.sync_api import sync_playwright
-import requests, random, string, time, json, os, base64, threading, sys
 
 app = Flask(__name__)
+
+PORT = 8080
 latest_screenshot = b''
 latest_credentials = {}
 
-def check_tor():
+def log(msg):
+    print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
+
+def tor_check():
     try:
-        r = requests.get('https://check.torproject.org', 
-                        proxies={'http': 'socks5://127.0.0.1:9050', 'https': 'socks5://127.0.0.1:9050'},
-                        timeout=10)
+        proxies = {
+            'http': 'socks5://127.0.0.1:9050',
+            'https': 'socks5://127.0.0.1:9050'
+        }
+        r = requests.get('https://check.torproject.org', proxies=proxies, timeout=15)
         return 'Congratulations' in r.text
-    except:
+    except Exception as e:
+        log(f"Tor check error: {e}")
         return False
 
-def get_free_email():
+def get_email():
     try:
+        addr = f"{''.join(random.choices(string.ascii_lowercase, k=12))}@mail.tm"
         r = requests.post("https://api.mail.tm/accounts", json={
-            "address": f"{''.join(random.choices(string.ascii_lowercase, k=10))}@mail.tm",
+            "address": addr,
             "password": "temp123!"
         }, timeout=10)
-        return r.json()
+        return r.json().get('address', addr)
     except Exception as e:
-        return {"address": f"error_{random.randint(1000,9999)}@mail.tm", "error": str(e)}
-
-def get_tor_proxy():
-    return {"server": "socks5://127.0.0.1:9050"}
-
-def humanized_typing(page, selector, text):
-    page.click(selector)
-    for char in text:
-        page.keyboard.press(char)
-        time.sleep(random.uniform(0.05, 0.25))
-        if random.random() < 0.05:
-            page.keyboard.press("Backspace")
-            time.sleep(random.uniform(0.1, 0.3))
-            page.keyboard.press(char)
-
-def random_mouse_wander(page):
-    for _ in range(random.randint(5, 12)):
-        x, y = random.randint(100, 1200), random.randint(100, 700)
-        page.mouse.move(x, y, steps=random.randint(3, 8))
-        time.sleep(random.uniform(0.2, 0.8))
+        log(f"Email error: {e}")
+        return f"fail_{random.randint(1000,9999)}@mail.tm"
 
 @app.route('/')
 def index():
@@ -50,111 +46,96 @@ def index():
 
 @app.route('/stream')
 def stream():
-    def generate():
+    def gen():
         while True:
             if latest_screenshot:
-                yield (b'--frame\r\n'
-                       b'Content-Type: image/jpeg\r\n\r\n' + latest_screenshot + b'\r\n')
+                yield b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + latest_screenshot + b'\r\n'
             time.sleep(1)
-    return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
+    return Response(gen(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
-@app.route('/create', methods=['POST'])
-def create_account():
-    global latest_screenshot, latest_credentials
-    
-    def run_automation():
-        global latest_screenshot, latest_credentials
-        try:
-            with sync_playwright() as p:
-                browser = p.chromium.launch(
-                    proxy=get_tor_proxy(),
-                    args=[
-                        '--disable-blink-features=AutomationControlled',
-                        '--no-sandbox',
-                        '--disable-setuid-sandbox',
-                        '--disable-dev-shm-usage',
-                        '--disable-gpu'
-                    ],
-                    headless=True
-                )
-                
-                context = browser.new_context(
-                    viewport={'width': 1366, 'height': 768},
-                    user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.0',
-                    locale='en-US',
-                    timezone_id='America/New_York'
-                )
-                
-                page = context.new_page()
-                page.goto('https://www.instagram.com/accounts/emailsignup/', timeout=30000)
-                time.sleep(random.uniform(2, 4))
-                
-                latest_screenshot = page.screenshot(type='jpeg', quality=70)
-                
-                random_mouse_wander(page)
-                latest_screenshot = page.screenshot(type='jpeg', quality=70)
-                
-                email_data = get_free_email()
-                email = email_data.get('address', 'unknown@mail.tm')
-                
-                humanized_typing(page, 'input[name="emailOrPhone"]', email)
-                latest_screenshot = page.screenshot(type='jpeg', quality=70)
-                time.sleep(random.uniform(0.5, 1.5))
-                
-                full_name = f"{random.choice(['Alex','Jordan','Casey','Taylor','Morgan'])} {random.choice(['Smith','Jones','Brown','Davis','Wilson'])}"
-                humanized_typing(page, 'input[name="fullName"]', full_name)
-                latest_screenshot = page.screenshot(type='jpeg', quality=70)
-                
-                username = f"{full_name.replace(' ','').lower()}{random.randint(10,9999)}"
-                humanized_typing(page, 'input[name="username"]', username)
-                latest_screenshot = page.screenshot(type='jpeg', quality=70)
-                
-                password = ''.join(random.choices(string.ascii_letters + string.digits + '!@#$%^&*', k=16))
-                humanized_typing(page, 'input[name="password"]', password)
-                latest_screenshot = page.screenshot(type='jpeg', quality=70)
-                
-                random_mouse_wander(page)
-                time.sleep(random.uniform(1, 3))
-                
-                page.click('button[type="submit"]')
-                time.sleep(5)
-                latest_screenshot = page.screenshot(type='jpeg', quality=70)
-                
-                latest_credentials = {
-                    'email': email,
-                    'username': username,
-                    'password': password,
-                    'status': 'submitted'
-                }
-                
-                try:
-                    requests.post('http://127.0.0.1:9051', data='SIGNAL NEWNYM', timeout=5)
-                except:
-                    pass
-                    
-                browser.close()
-        except Exception as e:
-            latest_credentials = {'error': str(e), 'status': 'failed'}
-            latest_screenshot = b''
-    
-    thread = threading.Thread(target=run_automation)
-    thread.start()
-    
-    return jsonify({'status': 'started', 'message': 'Automation running, watch live feed'})
-
-@app.route('/credentials')
-def credentials():
-    return jsonify(latest_credentials)
-
-@app.route('/health')
-def health():
+@app.route('/status')
+def status():
     return jsonify({
-        'tor_running': check_tor(),
-        'port': os.environ.get('PORT', 5000)
+        'tor': tor_check(),
+        'port': PORT,
+        'screenshot_size': len(latest_screenshot)
     })
 
+@app.route('/create', methods=['POST'])
+def create():
+    global latest_screenshot, latest_credentials
+    
+    def run():
+        global latest_screenshot, latest_credentials
+        try:
+            from playwright.sync_api import sync_playwright
+            
+            browser = sync_playwright().start().chromium.launch(
+                proxy={"server": "socks5://127.0.0.1:9050"},
+                args=[
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
+                    '--disable-dev-shm-usage',
+                    '--disable-gpu',
+                    '--disable-blink-features=AutomationControlled'
+                ],
+                headless=True
+            )
+            
+            ctx = browser.new_context(
+                viewport={'width': 1366, 'height': 768},
+                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.0'
+            )
+            
+            page = ctx.new_page()
+            page.goto('https://www.instagram.com/accounts/emailsignup/', timeout=30000)
+            time.sleep(3)
+            latest_screenshot = page.screenshot(type='jpeg', quality=70)
+            
+            email = get_email()
+            
+            page.fill('input[name="emailOrPhone"]', email)
+            time.sleep(random.uniform(0.3, 0.8))
+            latest_screenshot = page.screenshot(type='jpeg', quality=70)
+            
+            name = f"{random.choice(['Alex','Jordan','Casey'])} {random.choice(['Smith','Jones'])}"
+            page.fill('input[name="fullName"]', name)
+            time.sleep(random.uniform(0.3, 0.8))
+            
+            user = f"{name.replace(' ','').lower()}{random.randint(10,9999)}"
+            page.fill('input[name="username"]', user)
+            time.sleep(random.uniform(0.3, 0.8))
+            
+            pw = ''.join(random.choices(string.ascii_letters + string.digits + '!@#$', k=14))
+            page.fill('input[name="password"]', pw)
+            time.sleep(random.uniform(0.3, 0.8))
+            latest_screenshot = page.screenshot(type='jpeg', quality=70)
+            
+            page.click('button[type="submit"]')
+            time.sleep(5)
+            latest_screenshot = page.screenshot(type='jpeg', quality=70)
+            
+            latest_credentials = {'email': email, 'username': user, 'password': pw}
+            
+            try:
+                requests.post('http://127.0.0.1:9051', data='SIGNAL NEWNYM', timeout=3)
+            except:
+                pass
+                
+            browser.close()
+            
+        except Exception as e:
+            log(f"Automation error: {e}")
+            latest_credentials = {'error': str(e)}
+    
+    threading.Thread(target=run).start()
+    return jsonify({'status': 'started'})
+
+@app.route('/credentials')
+def creds():
+    return jsonify(latest_credentials)
+
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    print(f"Starting on port {port}", file=sys.stderr)
-    print(f"Tor check: {check_tor()}", file=sys.stderr)
-    app.run(host='0.0.0.0', port=port, threaded=True)
+    log(f"Starting app on 0.0.0.0:{PORT}")
+    log(f"Tor status: {tor_check()}")
+    app.run(host='0.0.0.0', port=PORT, threaded=True)
