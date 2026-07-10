@@ -9,27 +9,12 @@ from flask import Flask, render_template, Response, jsonify
 
 app = Flask(__name__)
 PORT = int(os.environ.get("PORT", 8080))
+
 latest_screenshot = b''
 latest_credentials = {}
 
 def log(msg):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", file=sys.stderr, flush=True)
-
-def tor_check():
-    try:
-        proxies = {'http': 'socks5://127.0.0.1:9050', 'https': 'socks5://127.0.0.1:9050'}
-        r = requests.get('https://check.torproject.org', proxies=proxies, timeout=15)
-        return 'Congratulations' in r.text
-    except:
-        return False
-
-def get_email():
-    try:
-        addr = f"{''.join(random.choices(string.ascii_lowercase, k=12))}@mail.tm"
-        r = requests.post("https://api.mail.tm/accounts", json={"address": addr, "password": "temp123!"}, timeout=10)
-        return r.json().get('address', addr)
-    except:
-        return f"fail_{random.randint(1000,9999)}@mail.tm"
 
 @app.route('/')
 def index():
@@ -46,7 +31,7 @@ def stream():
 
 @app.route('/status')
 def status():
-    return jsonify({'tor': tor_check(), 'port': PORT, 'screenshot_size': len(latest_screenshot)})
+    return jsonify({'alive': True, 'port': PORT})
 
 @app.route('/create', methods=['POST'])
 def create():
@@ -69,7 +54,7 @@ def create():
             time.sleep(3)
             latest_screenshot = page.screenshot(type='jpeg', quality=70)
             
-            email = get_email()
+            email = f"{''.join(random.choices(string.ascii_lowercase, k=12))}@mail.tm"
             page.fill('input[name="emailOrPhone"]', email)
             time.sleep(random.uniform(0.3, 0.8))
             
@@ -110,5 +95,5 @@ def creds():
     return jsonify(latest_credentials)
 
 if __name__ == '__main__':
-    log(f"STARTING PORT={PORT} TOR={tor_check()}")
+    log(f"STARTING ON PORT {PORT}")
     app.run(host='0.0.0.0', port=PORT, threaded=True)
