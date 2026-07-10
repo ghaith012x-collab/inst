@@ -438,7 +438,36 @@ def run_signup():
                     has_name = True; break
             except: pass
 
+        # Debug: log page info
+        try:
+            log(f"  📄 Page title: {page.title()[:80]}")
+            log(f"  📄 Page URL: {page.url[:100]}")
+            # Count total inputs
+            all_inputs = page.locator('input').count()
+            all_buttons = page.locator('button').count()
+            log(f"  📄 Inputs: {all_inputs}  Buttons: {all_buttons}")
+        except: pass
         log(f"  🔍 Detected: email={has_email}  name={has_name}")
+
+        if not has_email and not has_name:
+            # Fallback: try the first visible input and first visible button
+            log("  ⚠️ No known fields detected! Trying generic fallback...")
+            try:
+                first_input = page.locator('input:visible').first
+                if first_input:
+                    first_input.click(timeout=3000)
+                    first_input.fill(email, timeout=3000)
+                    log(f"  ✅ Fallback: filled first input with email")
+                    has_email = True
+            except: pass
+            try:
+                first_btn = page.locator('button:visible').first
+                if first_btn:
+                    first_btn.click(timeout=3000)
+                    log(f"  👆 Fallback: clicked first button")
+            except: pass
+            time.sleep(2)
+            accept_cookies(page)
 
         if has_email:
             fill_field(page, [
