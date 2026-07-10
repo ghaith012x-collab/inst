@@ -52,11 +52,11 @@
             padding: 10px; 
             border: 1px solid #333;
             font-size: 12px;
+            font-family: 'Courier New', monospace;
+            white-space: pre-wrap;
+            word-break: break-all;
         }
-        .log-entry { margin: 3px 0; padding: 2px 0; border-bottom: 1px solid #1a1a1a; }
-        .log-info { color: #00ff41; }
-        .log-warn { color: #ffaa00; }
-        .log-error { color: #ff4444; }
+        .log-line { margin: 1px 0; border-bottom: 1px solid #111; padding: 1px 0; }
         .cred-row { display: flex; justify-content: space-between; margin: 8px 0; font-size: 13px; }
         .cred-label { color: #888; }
         .cred-value { color: #fff; word-break: break-all; }
@@ -114,6 +114,10 @@
                     <span class="cred-value" id="last-email">waiting...</span>
                 </div>
                 <div class="cred-row">
+                    <span class="cred-label">Full Name:</span>
+                    <span class="cred-value" id="last-name">waiting...</span>
+                </div>
+                <div class="cred-row">
                     <span class="cred-label">Username:</span>
                     <span class="cred-value" id="last-user">waiting...</span>
                 </div>
@@ -124,8 +128,8 @@
             </div>
             
             <div class="panel">
-                <h3>📜 ACTIVITY LOG</h3>
-                <div id="log"></div>
+                <h3>📜 LIVE SERVER LOGS</h3>
+                <div id="log">Loading logs...</div>
             </div>
         </div>
     </div>
@@ -134,15 +138,27 @@
         let attempts = 0;
         let successes = 0;
         let running = false;
-        
-        function log(msg, type='info') {
+        let logPoll;
+
+        function addLog(msg) {
             const div = document.getElementById('log');
-            const cls = type === 'warn' ? 'log-warn' : type === 'error' ? 'log-error' : 'log-info';
-            const time = new Date().toLocaleTimeString();
-            div.innerHTML += `<div class="log-entry ${cls}">[${time}] ${msg}</div>`;
+            div.innerHTML += `<div class="log-line">${msg}</div>`;
             div.scrollTop = div.scrollHeight;
         }
-        
+
+        // Poll server logs every second
+        async function pollLogs() {
+            try {
+                const res = await fetch('/logs');
+                const lines = await res.json();
+                document.getElementById('log').innerHTML = '';
+                lines.forEach(l => addLog(l));
+            } catch(e) {
+                // ignore fetch errors during cold start
+            }
+        }
+        logPoll = setInterval(pollLogs, 1000);
+
         async function createAccount() {
             if (running) return;
             running = true;
@@ -153,14 +169,12 @@
             attempts++;
             document.getElementById('stat-attempts').textContent = attempts;
             document.getElementById('cam-status').classList.add('status-active');
-            
-            log('▶ Starting account creation...', 'info');
-            
+
             try {
                 const res = await fetch('/create', {method: 'POST'});
                 const data = await res.json();
-                log(`Worker started (status: ${data.status})`, 'info');
-                
+                addLog('[client] Worker started');
+
                 // Poll for credentials
                 let waited = 0;
                 const poll = setInterval(async () => {
@@ -174,27 +188,27 @@
                             successes++;
                             document.getElementById('stat-success').textContent = successes;
                             document.getElementById('last-email').textContent = creds.email;
+                            document.getElementById('last-name').textContent = creds.full_name || '-';
                             document.getElementById('last-user').textContent = creds.username;
                             document.getElementById('last-pass').textContent = creds.password;
-                            log(`✅ Account created: ${creds.username}`, 'info');
-                            log('🔄 Tor IP rotated for next session', 'warn');
+                            addLog('[client] ✅ SUCCESS!');
                             resetButton();
                         } else if (creds.error) {
                             clearInterval(poll);
-                            log(`❌ Error: ${creds.error}`, 'error');
+                            addLog('[client] ❌ ERROR: ' + creds.error);
                             resetButton();
                         }
                     } catch(e) {}
                     
-                    if (waited > 30) { // 30 second timeout
+                    if (waited > 45) {
                         clearInterval(poll);
-                        log('⚠️ Timed out waiting for result', 'warn');
+                        addLog('[client] ⚠️ Timed out (45s)');
                         resetButton();
                     }
                 }, 1000);
-                
+
             } catch(e) {
-                log(`❌ Request failed: ${e.message}`, 'error');
+                addLog('[client] ❌ ' + e.message);
                 resetButton();
             }
         }
@@ -206,8 +220,8 @@
             btn.textContent = '🚀 CREATE ACCOUNT';
             document.getElementById('cam-status').classList.remove('status-active');
         }
-        
-        log('✅ System ready. Click CREATE ACCOUNT to begin.');
+
+        addLog('[client] ✅ Dashboard ready.');
     </script>
 </body>
 </html>
