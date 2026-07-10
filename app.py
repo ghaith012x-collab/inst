@@ -182,10 +182,8 @@ def click_button(page, selectors, label="button"):
 def select_dob(page):
     """
     Fill Instagram's date-of-birth step.
-    Instagram uses 3 <select> dropdowns: month, day, year.
-    Sometimes they're labeled; sometimes they're just in order.
+    Handles <select> dropdowns, text inputs, and hybrid UIs.
     """
-    # Generate a plausible DOB (18-35 years old)
     year = random.randint(1991, 2008)
     month = random.randint(1, 12)
     day = random.randint(1, 28 if month == 2 else 30)
@@ -198,103 +196,138 @@ def select_dob(page):
 
     log(f"  🎂 DOB: {month_name} {day}, {year}")
 
-    # ── STRATEGY 1: <select> elements by order (most reliable) ──
+    # Let the DOB step render
+    time.sleep(1.5)
+    global latest_screenshot
+    latest_screenshot = page.screenshot(type='jpeg', quality=70)
+
+    # ── STRATEGY 1: <select> dropdowns by DOM order ──
     try:
-        time.sleep(1)  # let DOB step render fully
         selects = page.locator('select')
         count = selects.count()
         log(f"  🔍 Found {count} <select> elements on DOB page")
         if count >= 3:
-            # Usually: [0]=month, [1]=day, [2]=year
             selects.nth(0).select_option(str(month), timeout=3000)
-            log(f"  ✅ Month set to {month}")
+            log(f"  ✅ Month select = {month}")
             time.sleep(0.4)
             selects.nth(1).select_option(str(day), timeout=3000)
-            log(f"  ✅ Day set to {day}")
+            log(f"  ✅ Day select = {day}")
             time.sleep(0.4)
             selects.nth(2).select_option(str(year), timeout=3000)
-            log(f"  ✅ Year set to {year}")
+            log(f"  ✅ Year select = {year}")
             return True
         elif count > 0:
-            # Fewer than 3 — try sequentially
-            log(f"  ⚠️ Only {count} selects, trying best-effort...")
-            for i in range(count):
+            log(f"  ⚠️ Only {count} select(s), doing best-effort...")
+            vals = [str(month), str(day), str(year)]
+            for i in range(min(count, 3)):
                 try:
-                    val = [str(month), str(day), str(year)][i]
-                    selects.nth(i).select_option(val, timeout=3000)
-                    log(f"  ✅ Select[{i}] set to {val}")
+                    selects.nth(i).select_option(vals[i], timeout=3000)
+                    log(f"  ✅ Select[{i}] = {vals[i]}")
                 except:
                     pass
-            return count >= 1
     except Exception as e:
-        log(f"  ⚠️ Select-by-order: {e}")
+        log(f"  ⚠️ Select strategy: {e}")
 
-    # ── STRATEGY 2: Select by aria-label ──
-    month_selectors = [
-        'select[aria-label*="month" i]',
-        'select[aria-label*="Month"]',
-        'select[title*="month" i]',
-        'select[name*="month" i]',
-        'select[id*="month" i]',
-    ]
-    day_selectors = [
-        'select[aria-label*="day" i]',
-        'select[aria-label*="Day"]',
-        'select[title*="day" i]',
-        'select[name*="day" i]',
-        'select[id*="day" i]',
-    ]
-    year_selectors = [
-        'select[aria-label*="year" i]',
-        'select[aria-label*="Year"]',
-        'select[title*="year" i]',
-        'select[name*="year" i]',
-        'select[id*="year" i]',
-    ]
-
-    def pick_select(selectors_list, value, label):
+    # ── STRATEGY 2: Select by aria-label / name ──
+    def try_select(selectors_list, value):
         for s in selectors_list:
             try:
                 el = page.locator(s)
-                if el.count() > 0:
+                if el.count() > 0 and el.first.is_visible():
                     el.first.select_option(str(value), timeout=3000)
                     return True
             except:
                 continue
         return False
 
-    m_ok = pick_select(month_selectors, month, 'month')
+    m_ok = try_select([
+        'select[aria-label*="month" i]', 'select[aria-label*="Month"]',
+        'select[title*="month" i]', 'select[name*="month" i]',
+        'select[id*="month" i]',
+    ], month)
     time.sleep(0.2)
-    d_ok = pick_select(day_selectors, day, 'day')
+    d_ok = try_select([
+        'select[aria-label*="day" i]', 'select[aria-label*="Day"]',
+        'select[title*="day" i]', 'select[name*="day" i]',
+        'select[id*="day" i]',
+    ], day)
     time.sleep(0.2)
-    y_ok = pick_select(year_selectors, year, 'year')
+    y_ok = try_select([
+        'select[aria-label*="year" i]', 'select[aria-label*="Year"]',
+        'select[title*="year" i]', 'select[name*="year" i]',
+        'select[id*="year" i]',
+    ], year)
 
-    if m_ok and d_ok and y_ok:
-        log(f"  ✅ DOB set via aria-label selectors")
-        return True
+    if m_ok or d_ok or y_ok:
+        log(f"  ✅ DOB (aria-label selects): m={m_ok} d={d_ok} y={y_ok}")
 
-    # ── STRATEGY 3: Try typing the values (some Instagram UIs use text inputs) ──
-    # Month as text
-    for txt in [month_name, month_abbr, str(month)]:
-        if fill_field(page,
-            [f'input[aria-label*="month" i]', f'input[aria-label*="Month"]',
-             f'input[name*="month" i]', f'input[id*="month" i]'],
-            txt, 'month-text'):
+    # ── STRATEGY 3: Text/number inputs (Instagram sometimes uses these) ──
+    # Try each possible input type in priority order
+
+    # Month input
+    month_input_selectors = [
+        'input[aria-label*="month" i]', 'input[aria-label*="Month"]',
+        'input[name*="month" i]', 'input[id*="month" i]',
+        'input[placeholder*="month" i]', 'input[placeholder*="MM"]',
+    ]
+    m_input_ok = False
+    for txt in [str(month), month_name, month_abbr]:
+        for sel in month_input_selectors:
+            try:
+                loc = page.locator(sel)
+                if loc.count() > 0 and loc.first.is_visible():
+                    loc.first.click(timeout=2000)
+                    loc.first.fill('', timeout=2000)
+                    loc.first.type(txt, delay=random.randint(30, 70))
+                    log(f"  ✅ Month text input = {txt}")
+                    m_input_ok = True
+                    break
+            except:
+                continue
+        if m_input_ok:
             break
-    time.sleep(0.2)
-    # Day as text
-    fill_field(page,
-        [f'input[aria-label*="day" i]', f'input[aria-label*="Day"]',
-         f'input[name*="day" i]', f'input[id*="day" i]'],
-        str(day), 'day-text')
-    time.sleep(0.2)
-    # Year as text
-    fill_field(page,
-        [f'input[aria-label*="year" i]', f'input[aria-label*="Year"]',
-         f'input[name*="year" i]', f'input[id*="year" i]'],
-        str(year), 'year-text')
 
-    log(f"  ⚠️ DOB attempted via text inputs (may need manual intervention)")
+    time.sleep(0.3)
+
+    # Day input
+    day_input_selectors = [
+        'input[aria-label*="day" i]', 'input[aria-label*="Day"]',
+        'input[name*="day" i]', 'input[id*="day" i]',
+        'input[placeholder*="day" i]', 'input[placeholder*="DD"]',
+    ]
+    for sel in day_input_selectors:
+        try:
+            loc = page.locator(sel)
+            if loc.count() > 0 and loc.first.is_visible():
+                loc.first.click(timeout=2000)
+                loc.first.fill('', timeout=2000)
+                loc.first.type(str(day), delay=random.randint(30, 70))
+                log(f"  ✅ Day text input = {day}")
+                break
+        except:
+            continue
+
+    time.sleep(0.3)
+
+    # Year input
+    year_input_selectors = [
+        'input[aria-label*="year" i]', 'input[aria-label*="Year"]',
+        'input[name*="year" i]', 'input[id*="year" i]',
+        'input[placeholder*="year" i]', 'input[placeholder*="YYYY"]',
+    ]
+    for sel in year_input_selectors:
+        try:
+            loc = page.locator(sel)
+            if loc.count() > 0 and loc.first.is_visible():
+                loc.first.click(timeout=2000)
+                loc.first.fill('', timeout=2000)
+                loc.first.type(str(year), delay=random.randint(30, 70))
+                log(f"  ✅ Year text input = {year}")
+                break
+        except:
+            continue
+
+    log(f"  ⚠️ DOB attempted all strategies. Check screenshot for UI state.")
     return False
 
 
@@ -376,9 +409,9 @@ def run_signup():
         log(f"📋 Generated: name={full_name}  user={username}  email={email}")
 
         # ═══════════════════════════════════════════════════
-        #  STEP 1: Load signup page → enter EMAIL → Next
+        #  STEP 1: Load page → Accept cookies → Detect fields
         # ═══════════════════════════════════════════════════
-        log("── Step 1: Email ──")
+        log("── Step 1: Load & Detect ──")
         page.goto('https://www.instagram.com/accounts/emailsignup/',
                   timeout=30000, wait_until='domcontentloaded')
         accept_cookies(page)
@@ -388,70 +421,63 @@ def run_signup():
         except:
             pass
         accept_cookies(page)
-        time.sleep(1)
+        time.sleep(1.5)
         latest_screenshot = page.screenshot(type='jpeg', quality=70)
 
-        # Sometimes Instagram shows a "Use email" / "Sign up with email" option first
-        for link_text in ["Sign up with email", "Use email", "Email", "Sign up with Email or Phone"]:
+        # Detect what fields are visible on this page
+        has_email = False
+        has_name = False
+        for sel in ['input[name="emailOrPhone"]', 'input[type="email"]']:
             try:
-                link = page.get_by_text(link_text, exact=False)
-                if link.count() > 0 and link.first.is_visible():
-                    link.first.click(timeout=3000)
-                    log(f"  👆 Clicked '{link_text}' link")
-                    time.sleep(1.5)
-                    accept_cookies(page)
-                    break
-            except:
-                continue
-
-        email_ok = fill_field(page, [
-            'input[name="emailOrPhone"]',
-            'input[aria-label="Mobile Number or Email"]',
-            'input[aria-label*="email" i]',
-            'input[aria-label*="Email"]',
-            'input[type="email"]',
-            'input[autocomplete="email"]',
-            'input[name="email"]',
-        ], email, 'email')
-
-        if not email_ok:
-            # Maybe Instagram changed flow — try a more generic approach
-            log("  ⚠️ Email field not found, trying generic text input...")
+                if page.locator(sel).count() > 0 and page.locator(sel).first.is_visible():
+                    has_email = True; break
+            except: pass
+        for sel in ['input[name="fullName"]', 'input[aria-label*="name" i]']:
             try:
-                inputs = page.locator('input[type="text"]')
-                if inputs.count() > 0:
-                    inputs.first.fill(email, timeout=5000)
-                    log(f"  ✅ email = {email}  (first text input)")
-                    email_ok = True
-            except:
-                pass
+                if page.locator(sel).count() > 0 and page.locator(sel).first.is_visible():
+                    has_name = True; break
+            except: pass
 
-        human_delay()
-        next_clicked = click_button(page, [
-            'button[type="submit"]',
-            'button:has-text("Next")',
-            'button:has-text("Continue")',
-            'div[role="button"]:has-text("Next")',
-        ], 'Next (step 1)')
+        log(f"  🔍 Detected: email={has_email}  name={has_name}")
 
-        if not next_clicked:
-            # Maybe no Next button yet (single-page form or different flow)
-            log("  ℹ️  No Next button — may be single-page form, continuing...")
+        if has_email:
+            fill_field(page, [
+                'input[name="emailOrPhone"]',
+                'input[type="email"]',
+                'input[aria-label*="email" i]',
+            ], email, 'email')
+            human_delay()
+            click_button(page, [
+                'button[type="submit"]',
+                'button:has-text("Next")',
+            ], 'Next (email)')
+            time.sleep(3)
+            accept_cookies(page)
 
-        time.sleep(3)
-        accept_cookies(page)
+        if has_name:
+            fill_field(page, [
+                'input[name="fullName"]',
+                'input[aria-label*="name" i]',
+            ], full_name, 'full name')
+            human_delay()
+            click_button(page, [
+                'button[type="submit"]',
+                'button:has-text("Next")',
+            ], 'Next (name)')
+            time.sleep(3)
+            accept_cookies(page)
+
         latest_screenshot = page.screenshot(type='jpeg', quality=70)
 
         # ═══════════════════════════════════════════════════
-        #  STEP 2: Full Name → Next
+        #  STEP 2: Username → Next  (if not already filled)
         # ═══════════════════════════════════════════════════
-        log("── Step 2: Full Name ──")
+        log("── Step 2: Username ──")
         fill_field(page, [
-            'input[name="fullName"]',
-            'input[aria-label="Full Name"]',
-            'input[aria-label*="name" i]',
-            'input[aria-label*="Name"]',
-        ], full_name, 'full name')
+            'input[name="username"]',
+            'input[aria-label="Username"]',
+            'input[aria-label*="username" i]',
+        ], username, 'username')
 
         human_delay()
         click_button(page, [
@@ -465,14 +491,15 @@ def run_signup():
         latest_screenshot = page.screenshot(type='jpeg', quality=70)
 
         # ═══════════════════════════════════════════════════
-        #  STEP 3: Username → Next
+        #  STEP 3: Password → Next
         # ═══════════════════════════════════════════════════
-        log("── Step 3: Username ──")
+        log("── Step 3: Password ──")
         fill_field(page, [
-            'input[name="username"]',
-            'input[aria-label="Username"]',
-            'input[aria-label*="username" i]',
-        ], username, 'username')
+            'input[name="password"]',
+            'input[aria-label="Password"]',
+            'input[aria-label*="password" i]',
+            'input[type="password"]',
+        ], password, 'password')
 
         human_delay()
         click_button(page, [
@@ -486,31 +513,9 @@ def run_signup():
         latest_screenshot = page.screenshot(type='jpeg', quality=70)
 
         # ═══════════════════════════════════════════════════
-        #  STEP 4: Password → Next
+        #  STEP 4: Date of Birth → Next
         # ═══════════════════════════════════════════════════
-        log("── Step 4: Password ──")
-        fill_field(page, [
-            'input[name="password"]',
-            'input[aria-label="Password"]',
-            'input[aria-label*="password" i]',
-            'input[type="password"]',
-        ], password, 'password')
-
-        human_delay()
-        click_button(page, [
-            'button[type="submit"]',
-            'button:has-text("Next")',
-            'button:has-text("Continue")',
-        ], 'Next (step 4)')
-
-        time.sleep(3)
-        accept_cookies(page)
-        latest_screenshot = page.screenshot(type='jpeg', quality=70)
-
-        # ═══════════════════════════════════════════════════
-        #  STEP 5: Date of Birth → Next
-        # ═══════════════════════════════════════════════════
-        log("── Step 5: Date of Birth ──")
+        log("── Step 4: Date of Birth ──")
         select_dob(page)
 
         human_delay()
@@ -521,7 +526,7 @@ def run_signup():
             'button:has-text("Sign up")',
             'button:has-text("Sign Up")',
             'div[role="button"]:has-text("Next")',
-        ], 'Next (step 5 - DOB)')
+        ], 'Next (step 4 - DOB)')
 
         time.sleep(4)
         accept_cookies(page)
