@@ -16,6 +16,78 @@ latest_credentials = {}
 def log(msg):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", file=sys.stderr, flush=True)
 
+def accept_cookies(page):
+    """Auto-accept cookies on common consent banners."""
+    selectors = [
+        'button[data-testid="cookie-policy-manage-dialog-accept-button"]',
+        'button:has-text("Allow all cookies")',
+        'button:has-text("Accept all")',
+        'button:has-text("Accept")',
+        'button:has-text("Agree")',
+        'button:has-text("I accept")',
+        '[aria-label*="Accept"]',
+        '[aria-label*="allow"]',
+        'button[id*="accept"]',
+        'button[id*="cookie"]',
+        'button[class*="accept"]',
+        'button[class*="cookie"]',
+        '[data-testid="cookie-policy-dialog-accept-button"]',
+        'div[role="dialog"] button:last-child',
+    ]
+    
+    for selector in selectors:
+        try:
+            if page.locator(selector).count() > 0:
+                page.locator(selector).first.click(timeout=3000)
+                log(f"Clicked cookie accept: {selector}")
+                time.sleep(0.5)
+                return True
+        except:
+            continue
+    
+    try:
+        page.get_by_role("button", name="Allow all cookies").click(timeout=3000)
+        log("Clicked Instagram cookie accept")
+        return True
+    except:
+        pass
+    
+    return False
+
+def setup_ad_block(page):
+    """Block common ad and tracking domains."""
+    blocked_domains = [
+        'googleads.g.doubleclick.net',
+        'googlesyndication.com',
+        'google-analytics.com',
+        'facebook.com/tr/',
+        'connect.facebook.net',
+        'analytics.google.com',
+        'googletagmanager.com',
+        'adsystem.amazon.com',
+        'advertising.amazon.com',
+        'amazon-adsystem.com',
+        'outbrain.com',
+        'taboola.com',
+        'scorecardresearch.com',
+        'quantserve.com',
+        'moatads.com',
+        'adsrvr.org',
+        'adnxs.com',
+        'adsafeprotected.com',
+        'doubleverify.com',
+        'iasds.net',
+    ]
+    
+    def handle_route(route, request):
+        url = request.url
+        if any(domain in url for domain in blocked_domains):
+            route.abort()
+        else:
+            route.continue_()
+    
+    page.route("**/*", handle_route)
+
 @app.route('/')
 def index():
     return render_template('dashboard.html')
@@ -50,8 +122,17 @@ def create():
             ctx = browser.new_context(viewport={'width': 1366, 'height': 768})
             page = ctx.new_page()
             
+            # Enable ad blocking
+            setup_ad_block(page)
+            log("Ad blocker enabled")
+            
             page.goto('https://www.instagram.com/accounts/emailsignup/', timeout=30000)
-            time.sleep(3)
+            time.sleep(2)
+            
+            # Accept cookies if banner appears
+            accept_cookies(page)
+            
+            time.sleep(1)
             latest_screenshot = page.screenshot(type='jpeg', quality=70)
             
             email = f"{''.join(random.choices(string.ascii_lowercase, k=12))}@mail.tm"
