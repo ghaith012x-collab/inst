@@ -2,6 +2,7 @@ FROM python:3.11-slim
 
 RUN apt-get update && apt-get install -y \
     tor \
+    curl \
     libnss3 \
     libatk-bridge2.0-0 \
     libxss1 \
@@ -10,7 +11,20 @@ RUN apt-get update && apt-get install -y \
     libasound2 \
     fonts-liberation \
     libappindicator3-1 \
-    curl \
+    libxtst6 \
+    libxrandr2 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxi6 \
+    libpangocairo-1.0-0 \
+    libpango-1.0-0 \
+    libatk1.0-0 \
+    libcairo-gobject2 \
+    libcairo2 \
+    libgdk-pixbuf2.0-0 \
+    libglib2.0-0 \
+    libgtk-3-0 \
+    libgbm1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -25,13 +39,10 @@ RUN playwright install-deps chromium
 COPY . .
 
 RUN mkdir -p /app/buster
-RUN mkdir -p /var/run/tor
 
-COPY torrc /etc/tor/torrc
+EXPOSE 8080
 
-EXPOSE 5000
-
-CMD tor & \
-    sleep 5 && \
-    curl --socks5-hostname 127.0.0.1:9050 https://check.torproject.org || echo "Tor check failed" && \
+CMD tor --runasdaemon 1 && \
+    sleep 3 && \
+    curl -s --socks5-hostname 127.0.0.1:9050 https://check.torproject.org | grep -o "Congratulations" || echo "TOR_FAILED" && \
     python app.py
