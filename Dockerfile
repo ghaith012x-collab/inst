@@ -21,10 +21,8 @@ RUN apt-get update && apt-get install -y \
     libatk1.0-0 \
     libcairo-gobject2 \
     libcairo2 \
-    libgdk-pixbuf2.0-0 \
+    libgdk-pixbuf-2.0-0 \
     libglib2.0-0 \
-    libgtk-3-0 \
-    libgbm1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -42,7 +40,4 @@ RUN mkdir -p /app/buster
 
 EXPOSE 8080
 
-CMD tor --runasdaemon 1 && \
-    sleep 3 && \
-    curl -s --socks5-hostname 127.0.0.1:9050 https://check.torproject.org | grep -o "Congratulations" || echo "TOR_FAILED" && \
-    python app.py
+CMD ["sh", "-c", "tor --runasdaemon 1 && sleep 3 && curl -s --socks5-hostname 127.0.0.1:9050 https://check.torproject.org | grep -o 'Congratulations' || echo 'TOR_FAILED' && python app.py"]
