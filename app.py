@@ -200,19 +200,34 @@ def select_dob(page):
 
     # ── STRATEGY 1: <select> elements by order (most reliable) ──
     try:
+        time.sleep(1)  # let DOB step render fully
         selects = page.locator('select')
         count = selects.count()
+        log(f"  🔍 Found {count} <select> elements on DOB page")
         if count >= 3:
             # Usually: [0]=month, [1]=day, [2]=year
             selects.nth(0).select_option(str(month), timeout=3000)
-            time.sleep(0.3)
+            log(f"  ✅ Month set to {month}")
+            time.sleep(0.4)
             selects.nth(1).select_option(str(day), timeout=3000)
-            time.sleep(0.3)
+            log(f"  ✅ Day set to {day}")
+            time.sleep(0.4)
             selects.nth(2).select_option(str(year), timeout=3000)
-            log(f"  ✅ DOB set via 3 <select> elements (by order)")
+            log(f"  ✅ Year set to {year}")
             return True
+        elif count > 0:
+            # Fewer than 3 — try sequentially
+            log(f"  ⚠️ Only {count} selects, trying best-effort...")
+            for i in range(count):
+                try:
+                    val = [str(month), str(day), str(year)][i]
+                    selects.nth(i).select_option(val, timeout=3000)
+                    log(f"  ✅ Select[{i}] set to {val}")
+                except:
+                    pass
+            return count >= 1
     except Exception as e:
-        log(f"  ⚠️ Select-by-order failed: {e}")
+        log(f"  ⚠️ Select-by-order: {e}")
 
     # ── STRATEGY 2: Select by aria-label ──
     month_selectors = [
@@ -376,20 +391,52 @@ def run_signup():
         time.sleep(1)
         latest_screenshot = page.screenshot(type='jpeg', quality=70)
 
-        fill_field(page, [
+        # Sometimes Instagram shows a "Use email" / "Sign up with email" option first
+        for link_text in ["Sign up with email", "Use email", "Email", "Sign up with Email or Phone"]:
+            try:
+                link = page.get_by_text(link_text, exact=False)
+                if link.count() > 0 and link.first.is_visible():
+                    link.first.click(timeout=3000)
+                    log(f"  👆 Clicked '{link_text}' link")
+                    time.sleep(1.5)
+                    accept_cookies(page)
+                    break
+            except:
+                continue
+
+        email_ok = fill_field(page, [
             'input[name="emailOrPhone"]',
             'input[aria-label="Mobile Number or Email"]',
             'input[aria-label*="email" i]',
             'input[aria-label*="Email"]',
+            'input[type="email"]',
+            'input[autocomplete="email"]',
+            'input[name="email"]',
         ], email, 'email')
 
+        if not email_ok:
+            # Maybe Instagram changed flow — try a more generic approach
+            log("  ⚠️ Email field not found, trying generic text input...")
+            try:
+                inputs = page.locator('input[type="text"]')
+                if inputs.count() > 0:
+                    inputs.first.fill(email, timeout=5000)
+                    log(f"  ✅ email = {email}  (first text input)")
+                    email_ok = True
+            except:
+                pass
+
         human_delay()
-        click_button(page, [
+        next_clicked = click_button(page, [
             'button[type="submit"]',
             'button:has-text("Next")',
             'button:has-text("Continue")',
             'div[role="button"]:has-text("Next")',
         ], 'Next (step 1)')
+
+        if not next_clicked:
+            # Maybe no Next button yet (single-page form or different flow)
+            log("  ℹ️  No Next button — may be single-page form, continuing...")
 
         time.sleep(3)
         accept_cookies(page)
@@ -464,7 +511,7 @@ def run_signup():
         #  STEP 5: Date of Birth → Next
         # ═══════════════════════════════════════════════════
         log("── Step 5: Date of Birth ──")
-        select_dob()
+        select_dob(page)
 
         human_delay()
         click_button(page, [
