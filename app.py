@@ -354,7 +354,26 @@ def select_dob(page):
         except:
             continue
 
-    log(f"  ⚠️ DOB attempted all strategies. Check screenshot for UI state.")
+    log(f"  ⚠️ DOB native elements not found. Trying all-visible-inputs fallback...")
+    
+    # Last resort: fill every visible text/num input with DOB values in order
+    try:
+        text_inputs = page.locator('input[type="text"]:visible, input:not([type]):visible, input[type="number"]:visible')
+        count_ti = text_inputs.count()
+        log(f"  🔍 All-visible text inputs: {count_ti}")
+        dob_vals = [str(month), str(day), str(year)]
+        for i in range(min(count_ti, 3)):
+            try:
+                inp = text_inputs.nth(i)
+                inp.click(timeout=2000)
+                inp.fill('', timeout=2000)
+                inp.type(dob_vals[i], delay=random.randint(30, 70))
+                log(f"  ✅ Generic input[{i}] = {dob_vals[i]}")
+            except Exception as e:
+                log(f"  ⚠️ Generic input[{i}]: {e}")
+    except Exception as e:
+        log(f"  ⚠️ Generic fallback failed: {e}")
+
     return False
 
 
