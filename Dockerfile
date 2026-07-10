@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.11-bookworm
 
 RUN apt-get update && apt-get install -y \
     tor \
@@ -21,7 +21,7 @@ RUN apt-get update && apt-get install -y \
     libatk1.0-0 \
     libcairo-gobject2 \
     libcairo2 \
-    libgdk-pixbuf-2.0-0 \
+    libgdk-pixbuf2.0-0 \
     libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
@@ -30,7 +30,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-ENV PLAYWRIGHT_BROWSERS_PATH=/app/ms-playwright
+# Install playwright browsers
 RUN playwright install chromium
 RUN playwright install-deps chromium
 
@@ -38,6 +38,9 @@ COPY . .
 
 RUN mkdir -p /app/buster
 
+# Make startup script executable
+RUN chmod +x start.sh
+
 EXPOSE 8080
 
-CMD ["sh", "-c", "tor --runasdaemon 1 && sleep 3 && curl -s --socks5-hostname 127.0.0.1:9050 https://check.torproject.org | grep -o 'Congratulations' || echo 'TOR_FAILED' && python app.py"]
+CMD ["./start.sh"]
