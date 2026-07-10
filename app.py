@@ -32,11 +32,6 @@ def random_mouse_wander(page):
         page.mouse.move(x, y, steps=random.randint(3, 8))
         time.sleep(random.uniform(0.2, 0.8))
 
-def screenshot_stream():
-    global latest_screenshot
-    while True:
-        time.sleep(1)
-
 @app.route('/')
 def index():
     return render_template('dashboard.html')
@@ -72,7 +67,7 @@ def create_account():
             
             context = browser.new_context(
                 viewport={'width': 1366, 'height': 768},
-                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.0',
+                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.0',
                 locale='en-US',
                 timezone_id='America/New_York'
             )
@@ -132,6 +127,4 @@ def credentials():
     return jsonify(latest_credentials)
 
 if __name__ == '__main__':
-    stream_thread = threading.Thread(target=screenshot_stream, daemon=True)
-    stream_thread.start()
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
