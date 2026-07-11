@@ -58,7 +58,7 @@ def run_signup():
         page.on("dialog", lambda d: d.dismiss())
         stealth(page)
 
-        # GET TEMP EMAIL FROM hi2.in
+        # ===== GET TEMP EMAIL FROM hi2.in =====
         log("Opening hi2.in...")
         page.goto('https://hi2.in/', timeout=30000, wait_until='domcontentloaded')
         try: page.wait_for_load_state('networkidle', timeout=15000)
@@ -66,7 +66,6 @@ def run_signup():
         time.sleep(4)
         ss(page)
 
-        # Click Generate
         page.evaluate("""() => {
             const all = document.querySelectorAll('button, div, span, a');
             for (const el of all) {
@@ -80,7 +79,6 @@ def run_signup():
         time.sleep(5)
         ss(page)
 
-        # Extract email
         email = ""
         for i in range(10):
             email = page.evaluate("""() => {
@@ -104,7 +102,7 @@ def run_signup():
             email = f"{''.join(random.choices(string.ascii_lowercase, k=12))}@gmail.com"
             log(f"Gmail fallback: {email}")
 
-        # INSTAGRAM SIGNUP
+        # ===== INSTAGRAM SIGNUP =====
         fn = random.choice(['Alex','Jordan','Casey','Riley','Morgan','Taylor','Jamie','Avery','Quinn','Skyler','Drew','Reese'])
         ln = random.choice(['Smith','Jones','Brown','Davis','Lee','Cruz','Wang','Kim','Patel','Garcia','Miller','Wilson'])
         full = f"{fn} {ln}"
@@ -170,7 +168,7 @@ def run_signup():
                 time.sleep(0.2); page.keyboard.press('Enter'); time.sleep(0.3)
         ss(page)
 
-        # SUBMIT - use UI click
+        # ===== SUBMIT =====
         log("Clicking Submit...")
         page.evaluate("""() => {
             const btns = document.querySelectorAll('[role="button"]');
@@ -179,40 +177,61 @@ def run_signup():
         time.sleep(8)
         ss(page)
 
-        # HANDLE CAPTCHA / SECURITY DIALOG
-        log("Checking for security dialog...")
-        for attempt in range(10):
+        # ===== HANDLE reCAPTCHA =====
+        log("Looking for reCAPTCHA...")
+        for attempt in range(15):
             try:
-                has_dialog = page.evaluate("""() => {
-                    const d = document.querySelector('[role="dialog"]');
-                    if (!d) return 'none';
-                    const txt = d.textContent.toLowerCase();
-                    if (txt.includes('confirm') || txt.includes('security') || txt.includes('challenge')) return 'captcha';
-                    return 'other';
-                }""")
-                log(f"Dialog {attempt+1}: {has_dialog}")
-
-                if has_dialog == 'none':
-                    log("No dialog - form submitted!")
-                    break
-
-                # Try to click Next button
-                page.evaluate("""() => {
-                    const btns = document.querySelectorAll('[role="button"]');
-                    for (const b of btns) {
-                        const txt = b.textContent.trim().toLowerCase();
-                        if (txt === 'next' || txt === 'verify' || txt === 'submit' || txt === 'confirm') {
-                            b.removeAttribute('aria-disabled');
-                            b.click(); return;
-                        }
-                    }
-                }""")
-                log(f"Clicked dialog button")
+                # Check for reCAPTCHA iframe
+                recaptcha = page.locator('iframe[title="reCAPTCHA"]')
+                if recaptcha.count() > 0:
+                    log(f"Found reCAPTCHA iframe! ({attempt+1})")
+                    frame = recaptcha.first.content_frame()
+                    if frame:
+                        # Click the checkbox
+                        anchor = frame.locator('#recaptcha-anchor')
+                        if anchor.count() > 0:
+                            anchor.first.click(timeout=5000)
+                            log("Clicked reCAPTCHA checkbox!")
+                            time.sleep(3)
+                            ss(page)
+                            # Check if we're past it
+                            checked = anchor.first.get_attribute('aria-checked')
+                            log(f"Checkbox state: {checked}")
+                            if checked == 'true':
+                                log("reCAPTCHA solved! (checkbox checked)")
+                                break
+                else:
+                    # Check for the verification dialog
+                    has_dialog = page.evaluate("""() => {
+                        const d = document.querySelector('[role="dialog"]');
+                        if (!d) return false;
+                        return d.textContent.toLowerCase().includes('confirm') || 
+                               d.textContent.toLowerCase().includes('security') || 
+                               d.textContent.toLowerCase().includes('challenge');
+                    }""")
+                    if has_dialog:
+                        log(f"Dialog present - checking for iframes...")
+                        # Try clicking Next in the dialog
+                        page.evaluate("""() => {
+                            const btns = document.querySelectorAll('[role="button"]');
+                            for (const b of btns) {
+                                const txt = b.textContent.trim().toLowerCase();
+                                if (txt === 'next' || txt === 'verify') {
+                                    b.removeAttribute('aria-disabled');
+                                    b.click(); return;
+                                }
+                            }
+                        }""")
+                        log("Clicked Next in dialog")
+                    else:
+                        log("No dialog - form may have submitted!")
+                        break
+                
                 time.sleep(5)
                 ss(page)
             except: break
 
-        # USERNAME RETRY
+        # ===== USERNAME RETRY =====
         for r in range(5):
             try:
                 bt = page.locator('body').inner_text()
@@ -238,7 +257,7 @@ def run_signup():
             }""")
             time.sleep(8); ss(page)
 
-        # FINAL
+        # ===== FINAL =====
         time.sleep(5); ss(page)
         cur = page.url
         log(f"Final URL: {cur[:120]}")
