@@ -1,4 +1,4 @@
-import os, sys, time, random, string, threading, requests, re
+import os, sys, time, random, string, threading, requests, re, json
 from flask import Flask, render_template, Response, jsonify
 
 app = Flask(__name__)
@@ -12,40 +12,33 @@ lock = threading.Lock()
 def log(msg):
     line = f"[{time.strftime('%H:%M:%S')}] {msg}"
     print(line, file=sys.stderr, flush=True)
-    with lock:
-        status_log.append(line)
-        if len(status_log) > 100: status_log.pop(0)
+    with lock: status_log.append(line)
+    if len(status_log) > 100: status_log.pop(0)
 
-# ─── STEALTH ───
-def apply_stealth(page):
-    stealth_js = """
-    Object.defineProperty(navigator, 'webdriver', {get: () => false});
-    Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
-    Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
-    Object.defineProperty(navigator, 'hardwareConcurrency', {get: () => 8});
-    window.chrome = {runtime: {}};
-    const origQuery = window.navigator.permissions.query;
-    window.navigator.permissions.query = (p) => (
-        p.name === 'notifications' ? Promise.resolve({state: Notification.permission}) : origQuery(p)
-    );
-    const newProto = navigator.__proto__;
-    delete newProto.webdriver;
-    """
-    page.add_init_script(stealth_js)
-
-# ─── SCREENSHOT ───
 def ss(page):
     with lock:
         global latest_screenshot
         try: latest_screenshot = page.screenshot(type='jpeg', quality=70)
         except: pass
 
-# ─── SIGNUP ───
+def apply_stealth(page):
+    stealth_js = """
+    Object.defineProperty(navigator, 'webdriver', {get: () => false});
+    Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+    Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
+    window.chrome = {runtime: {}};
+    const origQuery = window.navigator.permissions.query;
+    window.navigator.permissions.query = (p) => (
+        p.name === 'notifications' ? Promise.resolve({state: Notification.permission}) : origQuery(p)
+    );
+    try { delete navigator.__proto__.webdriver; } catch(e) {}
+    """
+    page.add_init_script(stealth_js)
+
 def run_signup():
     global latest_screenshot, latest_credentials
     try:
         from playwright.sync_api import sync_playwright
-
         p = sync_playwright().start()
         log("🌐 Starting browser...")
 
@@ -67,6 +60,13 @@ def run_signup():
         page.on("dialog", lambda d: d.dismiss())
         apply_stealth(page)
 
+        # Track API responses
+        api_responses = []
+        def on_response(response):
+            if 'web_create_ajax' in response.url:
+                response.text().then(lambda t: api_responses.append({'url': response.url, 'status': response.status, 'body': t[:500]}))
+        page.on("response", on_response)
+
         # ─── GEN CREDS ───
         email = f"{''.join(random.choices(string.ascii_lowercase, k=12))}@gmail.com"
         fn = random.choice(['Alex','Jordan','Casey','Riley','Morgan','Taylor','Jamie','Avery','Quinn','Skyler','Drew','Reese'])
@@ -74,7 +74,6 @@ def run_signup():
         full_name = f"{fn} {ln}"
         username = f"{full_name.replace(' ','').lower()}{random.randint(100,99999)}"
         password = ''.join(random.choices(string.ascii_letters+string.digits+'!@#$', k=14))
-
         log(f"📋 name={full_name} user={username} email={email}")
 
         # ─── LOAD PAGE ───
@@ -85,7 +84,7 @@ def run_signup():
         time.sleep(3)
         ss(page)
 
-        # ─── ACCEPT COOKIES ───
+        # Accept cookies
         for text in ["Allow all cookies","Accept All","Accept","Allow","I accept"]:
             try:
                 btn = page.get_by_role("button", name=text, exact=False)
@@ -95,69 +94,50 @@ def run_signup():
                     time.sleep(0.5)
                     break
             except: continue
-
         time.sleep(2)
         ss(page)
 
-        # ─── GET CSRF TOKEN ───
-        csrf_token = ""
-        for c in ctx.cookies():
-            if c['name'] == 'csrftoken':
-                csrf_token = c['value']
-                break
-        log(f"  🔑 CSRF: {csrf_token[:20]}...")
+        # Get CSRF token from page
+        csrf = page.evaluate("() => (document.cookie.match(/csrftoken=([^;]+)/)||[])[1] || ''")
+        log(f"  🔑 CSRF: {csrf[:20]}...")
 
         # ─── FILL FIELDS ───
         inputs = page.locator('input:visible')
         ic = inputs.count()
         log(f"  🔍 {ic} visible inputs")
 
-        # Email
-        inputs.nth(0).click(timeout=3000)
-        time.sleep(0.2)
-        inputs.nth(0).fill('', timeout=3000)
-        time.sleep(0.1)
-        inputs.nth(0).type(email, delay=random.randint(50,100))
+        def type_slow(el, text):
+            el.click(timeout=5000)
+            time.sleep(0.2)
+            el.fill('', timeout=3000)
+            time.sleep(0.15)
+            el.type(text, delay=random.randint(50,100))
+
+        type_slow(inputs.nth(0), email)
         log(f"  ✅ Email: {email}")
         time.sleep(random.uniform(0.5,1.2))
 
-        # Password
         for i in range(ic):
             if inputs.nth(i).get_attribute('type') == 'password':
-                inputs.nth(i).click(timeout=3000)
-                time.sleep(0.2)
-                inputs.nth(i).fill('', timeout=3000)
-                time.sleep(0.1)
-                inputs.nth(i).type(password, delay=random.randint(50,100))
+                type_slow(inputs.nth(i), password)
                 log(f"  ✅ Password filled")
                 break
         time.sleep(random.uniform(0.5,1.2))
 
-        # Full Name
         tf = 0
         for i in range(ic):
             tp = inputs.nth(i).get_attribute('type')
             if tp == 'text':
                 if tf == 0: tf = 1
                 elif tf == 1:
-                    inputs.nth(i).click(timeout=3000)
-                    time.sleep(0.2)
-                    inputs.nth(i).fill('', timeout=3000)
-                    time.sleep(0.1)
-                    inputs.nth(i).type(full_name, delay=random.randint(50,100))
+                    type_slow(inputs.nth(i), full_name)
                     log(f"  ✅ Name: {full_name}")
-                    tf = 2
-                    break
+                    tf = 2; break
         time.sleep(random.uniform(0.5,1.2))
 
-        # Username
         for i in range(ic):
             if inputs.nth(i).get_attribute('type') == 'search':
-                inputs.nth(i).click(timeout=3000)
-                time.sleep(0.2)
-                inputs.nth(i).fill('', timeout=3000)
-                time.sleep(0.1)
-                inputs.nth(i).type(username, delay=random.randint(50,100))
+                type_slow(inputs.nth(i), username)
                 log(f"  ✅ Username: {username}")
                 break
         time.sleep(random.uniform(0.5,1.2))
@@ -184,27 +164,26 @@ def run_signup():
                 log(f"  ✅ {label.split()[1]}: {val}")
         ss(page)
 
-        # ─── SUBMIT VIA FETCH API ───
-        # This bypasses UI validation and directly calls Instagram's API
-        log("── Submitting via Instagram API ──")
-        
-        timestamp = int(time.time())
-        enc_password = f"#PWD_INSTAGRAM_BROWSER:0:{timestamp}:{password}"
-        
+        # ─── SUBMIT via Instagram's actual API call ───
+        log("── Submitting form ──")
+        ts = int(time.time())
+        enc_pwd = f"#PWD_INSTAGRAM_BROWSER:0:{ts}:{password}"
+
+        # Submit using the actual form's submit behavior - use JS to trigger the React form submit
         result = page.evaluate("""(args) => {
-            const [csrf, email, username, password, enc_password, full_name, day, month, year] = args;
-            const formData = new URLSearchParams();
-            formData.append('email', email);
-            formData.append('password', password);
-            formData.append('enc_password', enc_password);
-            formData.append('username', username);
-            formData.append('first_name', full_name.split(' ')[0]);
-            formData.append('day', day);
-            formData.append('month', month);
-            formData.append('year', year);
-            formData.append('seamless_login_enabled', '1');
-            formData.append('tos_version', 'row');
-            formData.append('client_id', '');
+            const [csrf, email, username, enc_pwd, full_name, day, month, year] = args;
+            
+            const fd = new URLSearchParams();
+            fd.append('email', email);
+            fd.append('enc_password', enc_pwd);
+            fd.append('username', username);
+            fd.append('first_name', full_name.split(' ')[0]);
+            fd.append('day', day);
+            fd.append('month', month);
+            fd.append('year', year);
+            fd.append('client_id', '');
+            fd.append('seamless_login_enabled', '1');
+            fd.append('tos_version', 'row');
             
             return fetch('/api/v1/web/accounts/web_create_ajax/', {
                 method: 'POST',
@@ -213,67 +192,55 @@ def run_signup():
                     'X-Instagram-AJAX': '1',
                     'Content-Type': 'application/x-www-form-urlencoded',
                 },
-                body: formData,
+                body: fd,
                 credentials: 'same-origin',
-            }).then(r => r.text().then(body => ({status: r.status, body: body})));
-        }""", [csrf_token, email, username, password, enc_password, full_name, str(dd), str(dm), str(dy)])
+            }).then(r => r.text().then(b => {
+                // Try to parse as JSON
+                let parsed = b;
+                try { parsed = JSON.parse(b); } catch(e) {}
+                return {status: r.status, body: parsed};
+            }));
+        }""", [csrf, email, username, enc_pwd, full_name, str(dd), str(dm), str(dy)])
 
-        log(f"  📡 API Status: {result['status']}")
-        log(f"  📡 API Response: {result['body'][:200]}")
-        
-        if result['status'] == 200:
-            log("✅ API SUCCESS!")
-            
-            # Try the second API endpoint for confirmation
-            time.sleep(2)
-            result2 = page.evaluate("""(args) => {
-                const [csrf] = args;
-                return fetch('/api/v1/web/accounts/web_create_ajax/attempt/', {
-                    method: 'POST',
-                    headers: {
-                        'X-CSRFToken': csrf,
-                        'X-Instagram-AJAX': '1',
-                        'Content-Type': 'application/x-www-form-urlencoded',
-                    },
-                    credentials: 'same-origin',
-                }).then(r => r.text().then(body => ({status: r.status, body: body})));
-            }""", [csrf_token])
-            log(f"  📡 Attempt response: {result2['body'][:200]}")
-        
-        time.sleep(5)
-        ss(page)
-        
-        # If API didn't work, try clicking the UI submit button
+        # Log the API response
+        log(f"  📡 API: {result['status']}")
+        if isinstance(result['body'], dict):
+            for k, v in result['body'].items():
+                log(f"    {k}: {str(v)[:150]}")
+        else:
+            log(f"    body: {str(result['body'])[:200]}")
+
+        # If API returned error, try UI submit
         if result['status'] != 200:
-            log("── Falling back to UI Submit ──")
-            try:
-                sub = page.locator('div[role="button"]:has-text("Submit")')
-                if sub.count() > 0 and sub.first.is_visible():
-                    sub.first.click(timeout=5000)
-                    log("  👆 Clicked Submit (UI)")
-            except: pass
+            log("── Trying UI Submit ──")
+            page.evaluate("""() => {
+                const btns = document.querySelectorAll('[role="button"]');
+                for (const btn of btns) {
+                    if (btn.textContent.includes('Submit')) {
+                        btn.click();
+                        return;
+                    }
+                }
+            }""")
 
-        # ─── WAIT AND CHECK ───
         time.sleep(8)
         ss(page)
-
         current_url = page.url
-        log(f"📄 URL after: {current_url[:120]}")
+        log(f"📄 URL: {current_url[:120]}")
 
-        # ─── USERNAME TAKEN RETRY ───
+        # Check for API responses that came after UI submit
+        for r in api_responses:
+            log(f"  📡 API response: {r['status']} - {r['body'][:200]}")
+
+        # ─── CHECK FOR USERNAME ERROR ───
         for retry in range(5):
             body_text = ""
             try: body_text = page.locator('body').inner_text()
             except: pass
-            
             if "not available" not in body_text and "already taken" not in body_text:
                 break
-            
-            log(f"  ⚠️ Username taken! (retry {retry+1}/5)")
             username = f"{full_name.replace(' ','').lower()}{random.randint(100,99999)}"
-            log(f"  🔄 New: {username}")
-            
-            # JS set the username
+            log(f"  ⚠️ Username taken! New: {username}")
             page.evaluate("""(nu) => {
                 const inputs = document.querySelectorAll('input');
                 for (const inp of inputs) {
@@ -287,58 +254,59 @@ def run_signup():
                     }
                 }
             }""", username)
-            log(f"  ✅ JS-set")
-            time.sleep(random.uniform(0.5,1.2))
-            
-            # Resubmit via API with new username
-            timestamp = int(time.time())
-            enc_password = f"#PWD_INSTAGRAM_BROWSER:0:{timestamp}:{password}"
-            
-            result = page.evaluate("""(args) => {
-                const [csrf, email, username, password, enc_password, day, month, year] = args;
-                const fd = new URLSearchParams();
-                fd.append('email', email);
-                fd.append('password', password);
-                fd.append('enc_password', enc_password);
-                fd.append('username', username);
-                fd.append('first_name', '');
-                fd.append('day', day);
-                fd.append('month', month);
-                fd.append('year', year);
-                fd.append('seamless_login_enabled', '1');
-                fd.append('tos_version', 'row');
-                return fetch('/api/v1/web/accounts/web_create_ajax/', {
-                    method: 'POST',
-                    headers: {'X-CSRFToken': csrf, 'X-Instagram-AJAX': '1', 'Content-Type': 'application/x-www-form-urlencoded'},
-                    body: fd,
-                    credentials: 'same-origin',
-                }).then(r => r.text().then(b => ({status: r.status, body: b})));
-            }""", [csrf_token, email, username, password, enc_password, str(dd), str(dm), str(dy)])
-            
-            log(f"  📡 API retry: {result['status']} - {result['body'][:150]}")
-            
-            if result['status'] == 200:
-                log("✅ API SUCCESS on retry!")
-                break
-            
-            time.sleep(5)
+            time.sleep(1)
+            # Resubmit
+            page.evaluate("""() => {
+                const btns = document.querySelectorAll('[role="button"]');
+                for (const btn of btns) {
+                    if (btn.textContent.includes('Submit')) {
+                        btn.click(); return;
+                    }
+                }
+            }""")
+            time.sleep(8)
             ss(page)
+            current_url = page.url
+            log(f"📄 URL retry: {current_url[:120]}")
 
         # ─── FINAL ───
         time.sleep(5)
         ss(page)
-        
         current_url = page.url
         log(f"📄 Final URL: {current_url[:120]}")
+
+        # Check for verification dialog
+        has_verify = False
+        try:
+            body_text = page.locator('body').inner_text()
+            if "confirm it's you" in body_text.lower() or "help us confirm" in body_text.lower():
+                has_verify = True
+                log("  🔒 Verification challenge detected!")
+                # Try to bypass
+                log("  🔓 Attempting bypass...")
+                page.evaluate("""() => {
+                    const btns = document.querySelectorAll('[role="button"]');
+                    for (const btn of btns) {
+                        if (btn.textContent.includes('Next')) {
+                            btn.removeAttribute('aria-disabled');
+                            btn.click();
+                            return 'Clicked Next';
+                        }
+                    }
+                    return 'No Next';
+                }""")
+                time.sleep(5)
+                ss(page)
+                current_url = page.url
+                log(f"📄 URL after bypass: {current_url[:120]}")
+        except: pass
 
         is_success = False
         try:
             bt = page.locator('body').inner_text()
-            for kw in ["welcome","let's go","start exploring","logged in","find people","save your login","you're logged in","signed in"]:
-                if kw.lower() in bt.lower():
-                    is_success = True
-                    log("✅ SUCCESS!")
-                    break
+            if any(kw in bt.lower() for kw in ["welcome","let's go","start exploring","logged in","find people","save your login","you're logged in","signed in"]):
+                is_success = True
+                log("✅ SUCCESS!")
         except: pass
 
         if "emailsignup" not in current_url and "signup" not in current_url:
@@ -349,6 +317,7 @@ def run_signup():
             latest_credentials = {
                 'email': email, 'username': username, 'password': password,
                 'full_name': full_name, 'status': 'success' if is_success else 'completed',
+                'verification': has_verify,
                 'final_url': current_url[:120],
             }
         log(f"🏁 Done: {username} | success={is_success}")
@@ -361,7 +330,7 @@ def run_signup():
         with lock:
             latest_credentials = {'error': str(e)}
 
-# ─── FLASK ROUTES ───
+# ─── FLASK ───
 @app.route('/')
 def index():
     return render_template('dashboard.html')
