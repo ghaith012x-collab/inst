@@ -35,55 +35,6 @@ def apply_stealth(page):
     Object.defineProperty(navigator, 'hardwareConcurrency', {get: () => 8});
     """)
 
-def create_mail():
-    try:
-        r = requests.get("https://api.mail.tm/domains", timeout=10)
-        if r.status_code != 200: return None, None, None
-        domains = r.json().get("hydra:member", [])
-        if not domains: return None, None, None
-        domain = domains[0]["domain"]
-        local = ''.join(random.choices(string.ascii_lowercase, k=10))
-        email = f"{local}@{domain}"
-        pwd = "TempAcc123!"
-        r = requests.post("https://api.mail.tm/accounts", json={"address": email, "password": pwd}, timeout=10)
-        if r.status_code == 201:
-            r2 = requests.post("https://api.mail.tm/token", json={"address": email, "password": pwd}, timeout=10)
-            if r2.status_code == 200:
-                log(f"  ✅ Temp inbox: {email}")
-                return email, r2.json().get("token", ""), pwd
-    except: pass
-    return None, None, None
-
-def check_mail(token, timeout=90):
-    start = time.time()
-    headers = {"Authorization": f"Bearer {token}"}
-    while time.time() - start < timeout:
-        try:
-            r = requests.get("https://api.mail.tm/messages", headers=headers, timeout=10)
-            if r.status_code == 200:
-                msgs = r.json().get("hydra:member", [])
-                for msg in msgs:
-                    subj = msg.get("subject", "")
-                    frm = msg.get("from", {}).get("address", "")
-                    log(f"  📧 {frm} | {subj}")
-                    if any(k in (subj+frm).lower() for k in ['instagram', 'code', 'confirm', 'verify']):
-                        mid = msg.get("id")
-                        if mid:
-                            m = requests.get(f"https://api.mail.tm/messages/{mid}", headers=headers, timeout=10)
-                            if m.status_code == 200:
-                                data = m.json()
-                                body = data.get("text", "") or ""
-                                codes = re.findall(r'\b(\d{5,6})\b', body)
-                                if codes: return codes[0]
-                                html = data.get("html", []) or []
-                                for p in html if isinstance(html, list) else [html]:
-                                    if isinstance(p, str):
-                                        codes = re.findall(r'\b(\d{5,6})\b', p)
-                                        if codes: return codes[0]
-        except: pass
-        time.sleep(5)
-    return None
-
 def run_signup():
     global latest_screenshot, latest_credentials
     try:
@@ -109,18 +60,13 @@ def run_signup():
         page.on("dialog", lambda d: d.dismiss())
         apply_stealth(page)
 
-        # Create temp email
-        log("📧 Creating temp email...")
-        email, mail_token, _ = create_mail()
-        if not email:
-            email = f"{''.join(random.choices(string.ascii_lowercase, k=15))}@gmail.com"
-            log(f"  Using gmail: {email}")
-
-        # GEN CREDS
-        fn = random.choice(['Alex','Jordan','Casey','Riley','Morgan','Taylor','Jamie','Avery','Quinn','Skyler','Drew','Reese'])
-        ln = random.choice(['Smith','Jones','Brown','Davis','Lee','Cruz','Wang','Kim','Patel','Garcia','Miller','Wilson'])
-        full_name = f"{fn} {ln}"
-        uname = f"{fn.lower()}{ln.lower()}{random.randint(100,99999)}"
+        # GEN CREDS - use realistic gmail (temp domains blocked by IG)
+        fname = random.choice(['Alex','Jordan','Casey','Riley','Morgan','Taylor','Jamie','Avery','Quinn','Skyler','Drew','Reese'])
+        lname = random.choice(['Smith','Jones','Brown','Davis','Lee','Cruz','Wang','Kim','Patel','Garcia','Miller','Wilson'])
+        full_name = f"{fname} {lname}"
+        local = f"{fname.lower()}.{lname.lower()}{random.randint(100,999)}"
+        email = f"{local}@gmail.com"
+        uname = f"{fname.lower()}{lname.lower()}{random.randint(1000,99999)}"
         pwd = ''.join(random.choices(string.ascii_letters+string.digits+'!@#$', k=14))
         log(f"📋 name={full_name} user={uname} email={email}")
 
@@ -217,60 +163,65 @@ def run_signup():
         }""", [csrf, email, uname, enc_pwd, full_name, str(dd), str(dm), str(dy)])
 
         log(f"  📡 API: {result['status']}")
-        account_created = False
         body_str = str(result['body'])
-        log(f"    body: {body_str[:200]}")
-        if '"account_created":true' in body_str:
-            account_created = True
-        if 'force_sign_up_code' in body_str:
-            log("  🔐 Code required!")
+        log(f"    body: {body_str[:300]}")
+        account_created = '"account_created":true' in body_str
+        needs_code = 'force_sign_up_code' in body_str
 
-        # Try resend code API
-        if not account_created and mail_token:
-            log("  🔐 Trying to resend verification code...")
-            try:
-                resend = page.evaluate("""(args) => {
-                    const [csrf] = args;
-                    return fetch('/api/v1/web/accounts/web_create_ajax/resend_code/', {
-                        method: 'POST',
-                        headers: {'X-CSRFToken': csrf, 'X-Instagram-AJAX': '1', 'Content-Type': 'application/x-www-form-urlencoded'},
-                        body: new URLSearchParams(),
-                        credentials: 'same-origin',
-                    }).then(r => r.text().then(t => ({status: r.status, body: t})));
-                }""", [csrf])
-                log(f"    resend: {resend['status']} - {str(resend['body'])[:150]}")
-            except Exception as e:
-                log(f"    resend error: {e}")
-            
-            # Wait for mail
-            log("  📧 Waiting for verification email...")
-            code = check_mail(mail_token, timeout=60)
-            
-            if code:
-                log(f"  🔑 Submitting code: {code}")
+        # If verification code needed, try UI path
+        if needs_code:
+            log("  🔐 Verificaton code required! Using UI path...")
+            # Click Submit in UI to trigger the verification dialog
+            page.evaluate("""() => {
+                const btns = document.querySelectorAll('[role="button"]');
+                for (const btn of btns) {
+                    if (btn.textContent.includes('Submit')) { btn.click(); return; }
+                }
+            }""")
+            time.sleep(5)
+            ss(page)
+
+            # Handle verification dialog - try to bypass
+            for attempt in range(8):
                 try:
-                    cres = page.evaluate("""(args) => {
-                        const [csrf, code] = args;
-                        const fd = new URLSearchParams();
-                        fd.append('code', code); fd.append('device_id', '');
-                        return fetch('/api/v1/web/accounts/web_create_ajax/confirm_code/', {
-                            method: 'POST',
-                            headers: {'X-CSRFToken': csrf, 'X-Instagram-AJAX': '1', 'Content-Type': 'application/x-www-form-urlencoded'},
-                            body: fd, credentials: 'same-origin',
-                        }).then(r => r.text().then(t => ({status: r.status, body: t})));
-                    }""", [csrf, code])
-                    log(f"    code result: {cres['status']} - {str(cres['body'])[:200]}")
-                    if '"account_created":true' in str(cres['body']):
-                        account_created = True
-                        log("✅ ACCOUNT CONFIRMED!")
+                    has_dialog = page.evaluate("""() => {
+                        const d = document.querySelector('[role="dialog"]');
+                        return d ? d.textContent.includes('confirm') || d.textContent.includes('Confirm') : false;
+                    }""")
+                    if not has_dialog:
+                        log("  ✅ No more verification dialog!")
+                        break
+                    
+                    # Try to click Next button via JS
+                    clicked = page.evaluate("""() => {
+                        const btns = document.querySelectorAll('[role="button"]');
+                        for (const btn of btns) {
+                            if (btn.textContent.includes('Next')) {
+                                btn.removeAttribute('aria-disabled');
+                                btn.click();
+                                return true;
+                            }
+                        }
+                        // Try div with role button
+                        const divs = document.querySelectorAll('div[role="button"]');
+                        for (const div of divs) {
+                            if (div.textContent.includes('Next')) {
+                                div.removeAttribute('aria-disabled');
+                                div.click(); return true;
+                            }
+                        }
+                        return false;
+                    }""")
+                    log(f"  🔓 Verification attempt {attempt+1}: {'Clicked Next' if clicked else 'No Next found'}")
+                    time.sleep(4)
+                    ss(page)
                 except Exception as e:
-                    log(f"    code confirm error: {e}")
-                time.sleep(5)
-                ss(page)
+                    log(f"  ⚠️ Verification error: {e}")
+                    break
 
-        # UI fallback
+        # If no code needed or API says account created, do UI submit as well
         if not account_created:
-            log("── UI Submit ──")
+            log("── UI Submit fallback ──")
             page.evaluate("""() => {
                 const btns = document.querySelectorAll('[role="button"]');
                 for (const btn of btns) {
@@ -286,7 +237,7 @@ def run_signup():
                 bt = page.locator('body').inner_text()
                 if "not available" not in bt and "already taken" not in bt: break
             except: pass
-            uname = f"{fn.lower()}{ln.lower()}{random.randint(100,99999)}"
+            uname = f"{fname.lower()}{lname.lower()}{random.randint(1000,99999)}"
             log(f"  ⚠️ Username taken! New: {uname}")
             page.evaluate("""(nu) => {
                 const inputs = document.querySelectorAll('input');
@@ -320,12 +271,11 @@ def run_signup():
         except: pass
         if "emailsignup" not in cur and "signup" not in cur: is_ok = True; log("✅ Navigated away!")
 
-        # Success if account_created from API OR if we got past signup page
         with lock:
             latest_credentials = {
                 'email': email, 'username': uname, 'password': pwd,
                 'full_name': full_name, 
-                'status': 'success' if is_ok else 'submitted',
+                'status': 'success' if is_ok else 'needs_verification',
                 'final_url': cur[:120],
             }
         log(f"🏁 Done: {uname} | success={is_ok}")
