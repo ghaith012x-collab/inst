@@ -21,6 +21,67 @@ def ss(page):
         try: latest_screenshot = page.screenshot(type='jpeg', quality=70)
         except: pass
 
+def get_hi2_email():
+    """Get temp email from hi2.in"""
+    from playwright.sync_api import sync_playwright
+    p = sync_playwright().start()
+    b = p.chromium.launch(args=['--no-sandbox'], headless=True)
+    page = b.new_page()
+    page.goto('https://hi2.in/', timeout=30000, wait_until='domcontentloaded')
+    time.sleep(4)
+    
+    # Click Generate
+    page.evaluate("""() => {
+        const all = document.querySelectorAll('button, div, span, a');
+        for (const el of all) {
+            if (el.textContent.trim().toLowerCase() === 'generate' && el.offsetParent !== null) {
+                el.click(); return;
+            }
+        }
+    }""")
+    time.sleep(5)
+    
+    # Get email
+    email = ''
+    for i in range(15):
+        email = page.evaluate("""() => {
+            const t = document.body.innerText;
+            const m = t.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}/);
+            if (m && m[0].length > 6 && m[0].includes('@') && !m[0].includes('random@')) return m[0];
+            return '';
+        }""")
+        if email and '@' in email:
+            break
+        time.sleep(1)
+    
+    b.close()
+    p.stop()
+    return email
+
+def check_hi2_inbox(token=None):
+    """Check hi2.in for verification code"""
+    from playwright.sync_api import sync_playwright
+    p = sync_playwright().start()
+    b = p.chromium.launch(args=['--no-sandbox'], headless=True)
+    page = b.new_page()
+    
+    code = None
+    for _ in range(15):
+        page.goto('https://hi2.in/', timeout=30000, wait_until='domcontentloaded')
+        time.sleep(3)
+        page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)")
+        time.sleep(2)
+        txt = page.evaluate("() => document.body.innerText")
+        codes = re.findall(r'\\b(\\d{5,6})\\b', txt)
+        if codes:
+            code = codes[0]
+            break
+        time.sleep(5)
+    
+    b.close()
+    p.stop()
+    return code
+
 def run_signup():
     global latest_screenshot, latest_credentials
     try:
@@ -48,17 +109,22 @@ def run_signup():
         window.chrome = {runtime: {}};
         try { delete navigator.__proto__.webdriver; } catch(e) {}""")
 
-        # GEN CREDS
+        # Step 1: First get hi2.in email in a separate page
+        log("Getting temp email from hi2.in...")
+        email = get_hi2_email()
+        if not email:
+            email = f"{''.join(random.choices(string.ascii_lowercase, k=12))}@gmail.com"
+        log(f"Email: {email}")
+
+        # Step 2: Gen creds
         fn = random.choice(['Alex','Jordan','Casey','Riley','Morgan','Taylor','Jamie','Avery','Quinn','Skyler','Drew','Reese'])
         ln = random.choice(['Smith','Jones','Brown','Davis','Lee','Cruz','Wang','Kim','Patel','Garcia','Miller','Wilson'])
         full = f"{fn} {ln}"
-        local = f"{fn.lower()}{random.randint(100,999)}"
-        email = f"{local}@gmail.com"
         uname = f"{fn.lower()}{ln.lower()}{random.randint(1000,99999)}"
         pwd = ''.join(random.choices(string.ascii_letters+string.digits+'!@#$', k=14))
-        log(f"name={full} user={uname} email={email}")
+        log(f"name={full} user={uname}")
 
-        # LOAD INSTAGRAM
+        # Step 3: Load Instagram
         log("Loading Instagram...")
         page.goto('https://www.instagram.com/accounts/emailsignup/', timeout=30000, wait_until='domcontentloaded')
         try: page.wait_for_load_state('networkidle', timeout=15000)
@@ -75,6 +141,11 @@ def run_signup():
         time.sleep(2)
         ss(page)
 
+        # Get CSRF token
+        csrf = page.evaluate("() => (document.cookie.match(/csrftoken=([^;]+)/)||[])[1] || ''")
+        log(f"CSRF: {csrf[:20]}...")
+
+        # Step 4: Fill form
         inp = page.locator('input:visible')
         ic = inp.count()
 
@@ -111,110 +182,112 @@ def run_signup():
                 time.sleep(0.2); page.keyboard.press('Enter'); time.sleep(0.3)
         ss(page)
 
-        # CLICK SUBMIT
-        log("Clicking Submit...")
-        page.evaluate("""() => {
-            const btns = document.querySelectorAll('[role="button"]');
-            for (const b of btns) { if (b.textContent.includes('Submit')) { b.click(); return; } }
-        }""")
-        time.sleep(8)
-        ss(page)
+        # Step 5: Submit via API
+        log("Submitting via API...")
+        t = int(time.time())
+        ep = f"#PWD_INSTAGRAM_BROWSER:0:{t}:{pwd}"
 
-        # STEP 1: Click Next in security dialog to trigger reCAPTCHA
-        log("Clicking Next to trigger reCAPTCHA...")
-        for i in range(3):
-            page.evaluate("""() => {
-                const btns = document.querySelectorAll('[role="button"]');
-                for (const b of btns) {
-                    if (b.textContent.trim().toLowerCase() === 'next') {
-                        b.removeAttribute('aria-disabled'); b.click(); return;
-                    }
-                }
-            }""")
-            time.sleep(5)
-            ss(page)
+        result = page.evaluate("""(args) => {
+            const [c, e, u, p, fn, d, m, y] = args;
+            const fd = new URLSearchParams();
+            fd.append('email',e); fd.append('enc_password',p);
+            fd.append('username',u); fd.append('first_name',fn.split(' ')[0]);
+            fd.append('day',d); fd.append('month',m); fd.append('year',y);
+            fd.append('client_id',''); fd.append('seamless_login_enabled','1'); fd.append('tos_version','row');
+            return fetch('/api/v1/web/accounts/web_create_ajax/', {
+                method:'POST', credentials:'same-origin',
+                headers:{'X-CSRFToken':c, 'X-Instagram-AJAX':'1', 'Content-Type':'application/x-www-form-urlencoded'},
+                body:fd,
+            }).then(r => r.text().then(t => ({status:r.status, body:t})));
+        }""", [csrf, email, uname, ep, full, str(dy), str(mo), str(yr)])
 
-        # STEP 2: Scan for reCAPTCHA iframe
-        log("Scanning for reCAPTCHA iframe...")
-        captcha_found = False
-        for _ in range(20):
-            for i in range(page.locator('iframe').count()):
-                try:
-                    fr = page.locator('iframe').nth(i).content_frame()
-                    if fr:
-                        anchor = fr.locator('#recaptcha-anchor')
-                        if anchor.count() > 0:
-                            log("Found reCAPTCHA checkbox!")
-                            anchor.first.click(timeout=3000)
-                            time.sleep(2)
-                            checked = anchor.first.get_attribute('aria-checked')
-                            log(f"Checked: {checked}")
-                            captcha_found = True
-                            break
-                except: pass
-            if captcha_found: break
-            time.sleep(1)
-        
-        if captcha_found:
-            log("reCAPTCHA solved! Clicking Next...")
-            time.sleep(3)
-            page.evaluate("""() => {
-                const btns = document.querySelectorAll('[role="button"]');
-                for (const b of btns) {
-                    if (b.textContent.trim().toLowerCase() === 'next') {
-                        b.removeAttribute('aria-disabled'); b.click(); return;
-                    }
-                }
-            }""")
-            time.sleep(5)
-            ss(page)
-        else:
-            log("No reCAPTCHA found, continuing...")
+        log(f"API: {result['status']}")
+        body_str = str(result['body'])
+        log(f"Body: {body_str[:200]}")
 
-        # STEP 3: Final Next clicks
-        for i in range(3):
-            page.evaluate("""() => {
-                const btns = document.querySelectorAll('[role="button"]');
-                for (const b of btns) {
-                    if (b.textContent.trim().toLowerCase() === 'next') {
-                        b.removeAttribute('aria-disabled'); b.click(); return;
-                    }
-                }
-            }""")
-            time.sleep(5)
-            ss(page)
+        account_created = '"account_created":true' in body_str
+        needs_code = 'force_sign_up_code' in body_str
 
-        # USERNAME RETRY
-        for r in range(5):
-            try:
-                bt = page.locator('body').inner_text()
-                if "not available" not in bt and "already taken" not in bt: break
-            except: pass
-            uname = f"{fn.lower()}{ln.lower()}{random.randint(1000,99999)}"
-            log(f"Username taken! New: {uname}")
-            page.evaluate("""(nu) => {
-                const inputs = document.querySelectorAll('input');
-                for (const inp of inputs) {
-                    if (inp.type === 'search' || inp.getAttribute('aria-label') === 'Username') {
-                        inp.disabled = false;
-                        const s = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-                        s.call(inp, nu); inp.dispatchEvent(new Event('input', {bubbles:true}));
-                        inp.dispatchEvent(new Event('change', {bubbles:true})); break;
-                    }
-                }
-            }""", uname)
-            time.sleep(1)
+        # Step 6: If verification code needed, click Submit in UI to trigger email, then check hi2.in
+        code = None
+        if needs_code:
+            log("Email verification required! Clicking UI Submit to trigger...")
             page.evaluate("""() => {
                 const btns = document.querySelectorAll('[role="button"]');
                 for (const b of btns) { if (b.textContent.includes('Submit')) { b.click(); return; } }
             }""")
-            time.sleep(8); ss(page)
+            time.sleep(5)
+            ss(page)
+            
+            # Click Next through any dialogs
+            for i in range(3):
+                page.evaluate("""() => {
+                    const btns = document.querySelectorAll('[role="button"]');
+                    for (const b of btns) {
+                        if (b.textContent.trim().toLowerCase() === 'next') {
+                            b.removeAttribute('aria-disabled'); b.click(); return;
+                        }
+                    }
+                }""")
+                time.sleep(5)
+                ss(page)
+            
+            # Check hi2.in for verification code
+            log("Checking hi2.in for verification code...")
+            code = check_hi2_inbox()
+            
+            if code:
+                log(f"Got verification code: {code}")
+                # Submit code via API
+                cr = page.evaluate("""(args) => {
+                    const [c, code] = args;
+                    const fd = new URLSearchParams();
+                    fd.append('code',code); fd.append('device_id','');
+                    return fetch('/api/v1/web/accounts/web_create_ajax/confirm_code/', {
+                        method:'POST', credentials:'same-origin',
+                        headers:{'X-CSRFToken':c, 'X-Instagram-AJAX':'1', 'Content-Type':'application/x-www-form-urlencoded'},
+                        body:fd,
+                    }).then(r => r.text().then(t => ({status:r.status, body:t})));
+                }""", [csrf, code])
+                log(f"Code API: {cr['status']} - {str(cr['body'])[:200]}")
+                if '"account_created":true' in str(cr['body']):
+                    account_created = True
+                    log("ACCOUNT CREATED!")
+                time.sleep(3)
+                ss(page)
+
+        # Step 7: Username retry
+        if not account_created:
+            for r in range(5):
+                try:
+                    bt = page.locator('body').inner_text()
+                    if "not available" not in bt and "already taken" not in bt: break
+                except: pass
+                uname = f"{fn.lower()}{ln.lower()}{random.randint(1000,99999)}"
+                log(f"Username taken! New: {uname}")
+                page.evaluate("""(nu) => {
+                    const inputs = document.querySelectorAll('input');
+                    for (const inp of inputs) {
+                        if (inp.type === 'search' || inp.getAttribute('aria-label') === 'Username') {
+                            inp.disabled = false;
+                            const s = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                            s.call(inp, nu); inp.dispatchEvent(new Event('input', {bubbles:true}));
+                            inp.dispatchEvent(new Event('change', {bubbles:true})); break;
+                        }
+                    }
+                }""", uname)
+                time.sleep(1)
+                page.evaluate("""() => {
+                    const btns = document.querySelectorAll('[role="button"]');
+                    for (const b of btns) { if (b.textContent.includes('Submit')) { b.click(); return; } }
+                }""")
+                time.sleep(8); ss(page)
 
         time.sleep(5); ss(page)
         cur = page.url
         log(f"Final: {cur[:120]}")
 
-        ok = False
+        ok = account_created
         try:
             bt = page.locator('body').inner_text()
             for kw in ["welcome","let's go","start exploring","logged in","find people","save your login"]:
@@ -226,6 +299,7 @@ def run_signup():
             latest_credentials = {
                 'email': email, 'username': uname, 'password': pwd,
                 'full_name': full, 'status': 'success' if ok else 'needs_verification',
+                'verification_code': code or '',
                 'final_url': cur[:120],
             }
         log(f"Done: {uname} | success={ok}")
@@ -248,9 +322,9 @@ def stream():
         while True:
             with lock:
                 if latest_screenshot:
-                    yield (b'--frame\r\n'
-                           b'Content-Type: image/jpeg\r\n\r\n'
-                           + latest_screenshot + b'\r\n')
+                    yield (b'--frame\\r\\n'
+                           b'Content-Type: image/jpeg\\r\\n\\r\\n'
+                           + latest_screenshot + b'\\r\\n')
             time.sleep(1)
     return Response(gen(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
