@@ -22,7 +22,7 @@ def ss(page):
         except: pass
 
 def apply_stealth(page):
-    stealth_js = """   
+    page.add_init_script("""   
     Object.defineProperty(navigator, 'webdriver', {get: () => false});
     Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
     Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
@@ -32,8 +32,57 @@ def apply_stealth(page):
         p.name === 'notifications' ? Promise.resolve({state: Notification.permission}) : origQuery(p)
     );
     try { delete navigator.__proto__.webdriver; } catch(e) {}
-    """
-    page.add_init_script(stealth_js)
+    """)
+
+# ─── MAIL.TM ───
+def create_mail():
+    try:
+        r = requests.get("https://api.mail.tm/domains", timeout=10)
+        if r.status_code != 200: return None, None, None
+        domains = r.json().get("hydra:member", [])
+        if not domains: return None, None, None
+        domain = domains[0]["domain"]
+        local = ''.join(random.choices(string.ascii_lowercase, k=10))
+        email = f"{local}@{domain}"
+        pwd = "TempAcc123!"
+        r = requests.post("https://api.mail.tm/accounts", json={"address": email, "password": pwd}, timeout=10)
+        if r.status_code == 201:
+            r2 = requests.post("https://api.mail.tm/token", json={"address": email, "password": pwd}, timeout=10)
+            if r2.status_code == 200:
+                log(f"  ✅ Temp inbox: {email}")
+                return email, r2.json().get("token", ""), pwd
+    except: pass
+    return None, None, None
+
+def check_mail(token, timeout=80):
+    start = time.time()
+    headers = {"Authorization": f"Bearer {token}"}
+    while time.time() - start < timeout:
+        try:
+            r = requests.get("https://api.mail.tm/messages", headers=headers, timeout=10)
+            if r.status_code == 200:
+                msgs = r.json().get("hydra:member", [])
+                for msg in msgs:
+                    subj = msg.get("subject", "")
+                    frm = msg.get("from", {}).get("address", "")
+                    log(f"  📧 {frm} | {subj}")
+                    if any(k in (subj+frm).lower() for k in ['instagram', 'code', 'confirm', 'verify']):
+                        mid = msg.get("id")
+                        if mid:
+                            m = requests.get(f"https://api.mail.tm/messages/{mid}", headers=headers, timeout=10)
+                            if m.status_code == 200:
+                                data = m.json()
+                                body = data.get("text", "") or ""
+                                codes = re.findall(r'\b(\d{5,6})\b', body)
+                                if codes: return codes[0]
+                                html = data.get("html", []) or []
+                                for p in html if isinstance(html, list) else [html]:
+                                    if isinstance(p, str):
+                                        codes = re.findall(r'\b(\d{5,6})\b', p)
+                                        if codes: return codes[0]
+        except: pass
+        time.sleep(5)
+    return None
 
 def run_signup():
     global latest_screenshot, latest_credentials
@@ -60,17 +109,22 @@ def run_signup():
         page.on("dialog", lambda d: d.dismiss())
         apply_stealth(page)
 
+        # ─── CREATE TEMP EMAIL ───
+        log("📧 Creating temp email...")
+        email, mail_token, _ = create_mail()
+        if not email:
+            email = f"{''.join(random.choices(string.ascii_lowercase, k=15))}@gmail.com"
+            log(f"  Using gmail: {email}")
+
         # ─── GEN CREDS ───
         fn = random.choice(['Alex','Jordan','Casey','Riley','Morgan','Taylor','Jamie','Avery','Quinn','Skyler','Drew','Reese'])
         ln = random.choice(['Smith','Jones','Brown','Davis','Lee','Cruz','Wang','Kim','Patel','Garcia','Miller','Wilson'])
         full_name = f"{fn} {ln}"
-        username = f"{full_name.replace(' ','').lower()}{random.randint(100,99999)}"
-        password = ''.join(random.choices(string.ascii_letters+string.digits+'!@#$', k=14))
-        # Use phone number format to avoid email verification
-        phone = f"+{random.choice(['1','44','49','33','61','81'])}{random.randint(100000000, 999999999)}"
-        log(f"📋 name={full_name} user={username} phone={phone[:8]}...")
+        uname = f"{full_name.replace(' ','').lower()}{random.randint(100,99999)}"
+        pwd = ''.join(random.choices(string.ascii_letters+string.digits+'!@#$', k=14))
+        log(f"📋 name={full_name} user={uname} email={email}")
 
-        # ─── LOAD EMAIL SIGNUP (will switch to phone) ───
+        # ─── LOAD ───
         log("── Loading Instagram signup ──")
         page.goto('https://www.instagram.com/accounts/emailsignup/', timeout=30000, wait_until='domcontentloaded')
         try: page.wait_for_load_state('networkidle', timeout=15000)
@@ -78,46 +132,35 @@ def run_signup():
         time.sleep(3)
         ss(page)
 
-        # Accept cookies
         for text in ["Allow all cookies","Accept All","Accept","Allow","I accept"]:
             try:
                 btn = page.get_by_role("button", name=text, exact=False)
                 if btn.count() > 0 and btn.first.is_visible():
-                    btn.first.click(timeout=3000)
-                    log("  🍪 Cookie accepted")
-                    time.sleep(0.5)
-                    break
+                    btn.first.click(timeout=3000); log("  🍪 Cookie accepted"); time.sleep(0.5); break
             except: continue
         time.sleep(2)
         ss(page)
 
-        # Get CSRF
         csrf = page.evaluate("() => (document.cookie.match(/csrftoken=([^;]+)/)||[])[1] || ''")
         log(f"  🔑 CSRF: {csrf[:20]}...")
 
-        # ─── FILL FIELDS ───
+        # ─── FILL ───
         inputs = page.locator('input:visible')
         ic = inputs.count()
         log(f"  🔍 {ic} visible inputs")
 
-        def type_slow(el, text):
-            el.click(timeout=5000)
-            time.sleep(0.2)
-            el.fill('', timeout=3000)
-            time.sleep(0.15)
+        def ts(el, text):
+            el.click(timeout=5000); time.sleep(0.2)
+            el.fill('', timeout=3000); time.sleep(0.15)
             el.type(text, delay=random.randint(50,100))
 
-        # Try to switch to phone if available, otherwise use email
-        # First try using phone number in the email field
-        type_slow(inputs.nth(0), phone)
-        log(f"  ✅ Phone: {phone[:15]}...")
+        ts(inputs.nth(0), email)
+        log(f"  ✅ Email: {email}")
         time.sleep(random.uniform(0.5,1.2))
 
         for i in range(ic):
             if inputs.nth(i).get_attribute('type') == 'password':
-                type_slow(inputs.nth(i), password)
-                log(f"  ✅ Password filled")
-                break
+                ts(inputs.nth(i), pwd); log("  ✅ Password"); break
         time.sleep(random.uniform(0.5,1.2))
 
         tf = 0
@@ -125,17 +168,12 @@ def run_signup():
             tp = inputs.nth(i).get_attribute('type')
             if tp == 'text':
                 if tf == 0: tf = 1
-                elif tf == 1:
-                    type_slow(inputs.nth(i), full_name)
-                    log(f"  ✅ Name: {full_name}")
-                    tf = 2; break
+                elif tf == 1: ts(inputs.nth(i), full_name); log(f"  ✅ Name: {full_name}"); tf = 2; break
         time.sleep(random.uniform(0.5,1.2))
 
         for i in range(ic):
             if inputs.nth(i).get_attribute('type') == 'search':
-                type_slow(inputs.nth(i), username)
-                log(f"  ✅ Username: {username}")
-                break
+                ts(inputs.nth(i), uname); log(f"  ✅ Username: {uname}"); break
         time.sleep(random.uniform(0.5,1.2))
         ss(page)
 
@@ -151,34 +189,24 @@ def run_signup():
         for label, val in [("Select Month", mn), ("Select Day", str(dd)), ("Select Year", str(dy))]:
             cb = page.locator(f'[role="combobox"][aria-label="{label}"]')
             if cb.count() > 0:
-                cb.first.click(timeout=3000)
-                time.sleep(0.4)
+                cb.first.click(timeout=3000); time.sleep(0.4)
                 page.keyboard.type(val, delay=random.randint(30,60))
-                time.sleep(0.3)
-                page.keyboard.press('Enter')
-                time.sleep(0.3)
+                time.sleep(0.3); page.keyboard.press('Enter'); time.sleep(0.3)
                 log(f"  ✅ {label.split()[1]}: {val}")
         ss(page)
 
         # ─── SUBMIT VIA API ───
         log("── Submitting via API ──")
-        ts = int(time.time())
-        enc_pwd = f"#PWD_INSTAGRAM_BROWSER:0:{ts}:{password}"
+        ts2 = int(time.time())
+        enc_pwd = f"#PWD_INSTAGRAM_BROWSER:0:{ts2}:{pwd}"
 
-        # Try email first (phone may not work on this endpoint)
         result = page.evaluate("""(args) => {
-            const [csrf, email, username, enc_pwd, full_name, day, month, year] = args;
+            const [csrf, email, uname, enc_pwd, full_name, day, month, year] = args;
             const fd = new URLSearchParams();
-            fd.append('email', email);
-            fd.append('enc_password', enc_pwd);
-            fd.append('username', username);
-            fd.append('first_name', full_name.split(' ')[0]);
-            fd.append('day', day);
-            fd.append('month', month);
-            fd.append('year', year);
-            fd.append('client_id', '');
-            fd.append('seamless_login_enabled', '1');
-            fd.append('tos_version', 'row');
+            fd.append('email', email); fd.append('enc_password', enc_pwd);
+            fd.append('username', uname); fd.append('first_name', full_name.split(' ')[0]);
+            fd.append('day', day); fd.append('month', month); fd.append('year', year);
+            fd.append('client_id', ''); fd.append('seamless_login_enabled', '1'); fd.append('tos_version', 'row');
             return fetch('/api/v1/web/accounts/web_create_ajax/', {
                 method: 'POST',
                 headers: {'X-CSRFToken': csrf, 'X-Instagram-AJAX': '1', 'Content-Type': 'application/x-www-form-urlencoded'},
@@ -186,121 +214,126 @@ def run_signup():
             }).then(r => r.json().then(b => ({status: r.status, body: b})).catch(() =>
                 r.text().then(t => ({status: r.status, body: t}))
             ));
-        }""", [csrf, phone, username, enc_pwd, full_name, str(dd), str(dm), str(dy)])
+        }""", [csrf, email, uname, enc_pwd, full_name, str(dd), str(dm), str(dy)])
 
         log(f"  📡 API: {result['status']}")
+        account_created = False
         if isinstance(result['body'], dict):
             log(f"    account_created: {result['body'].get('account_created', '?')}")
+            account_created = result['body'].get('account_created', False)
             errors = result['body'].get('errors', {})
             if errors:
                 for k, v in errors.items():
-                    log(f"    error {k}: {v}")
-            # Check for success
-            if result['body'].get('account_created'):
-                log("✅ ACCOUNT CREATED!")
-                is_success = True
-            else:
-                is_success = False
+                    log(f"    error {k}: {str(v)[:150]}")
         else:
             log(f"    body: {str(result['body'])[:200]}")
-            is_success = False
 
-        # If email verification is forced, try the phone number approach differently
-        # or just accept the result
-        if not is_success:
-            log("── Trying UI Submit as fallback ──")
+        # ─── HANDLE VERIFICATION CODE ───
+        code = None
+        if not account_created and mail_token and isinstance(result['body'], dict):
+            if 'force_sign_up_code' in str(result['body'].get('errors', {})):
+                log("  🔐 Code required! Waiting for email...")
+                code = check_mail(mail_token, timeout=60)
+        
+        if code:
+            log(f"  🔑 Submitting code: {code}")
+            cres = page.evaluate("""(args) => {
+                const [csrf, code] = args;
+                const fd = new URLSearchParams();
+                fd.append('code', code); fd.append('device_id', '');
+                return fetch('/api/v1/web/accounts/web_create_ajax/confirm_code/', {
+                    method: 'POST',
+                    headers: {'X-CSRFToken': csrf, 'X-Instagram-AJAX': '1', 'Content-Type': 'application/x-www-form-urlencoded'},
+                    body: fd, credentials: 'same-origin',
+                }).then(r => r.json().then(b => ({status: r.status, body: b})).catch(() =>
+                    r.text().then(t => ({status: r.status, body: t}))
+                ));
+            }""", [csrf, code])
+            log(f"  📡 Code result: {cres['status']} - {str(cres['body'])[:200]}")
+            if isinstance(cres['body'], dict) and cres['body'].get('account_created'):
+                account_created = True
+                log("✅ ACCOUNT CONFIRMED!")
+            time.sleep(5)
+            ss(page)
+
+        # ─── UI FALLBACK ───
+        if not account_created:
+            log("── UI Submit fallback ──")
             page.evaluate("""() => {
                 const btns = document.querySelectorAll('[role="button"]');
                 for (const btn of btns) {
-                    if (btn.textContent.includes('Submit')) {
-                        btn.click(); return;
-                    }
+                    if (btn.textContent.includes('Submit')) { btn.click(); return; }
                 }
             }""")
             time.sleep(8)
             ss(page)
             
-            # Check if phone verification is needed
-            body_text = ""
-            try: body_text = page.locator('body').inner_text()
-            except: pass
-            
-            if "confirm it's you" in body_text.lower() or "help us confirm" in body_text.lower():
-                log("  🔒 Phone verification challenge!")
-                # Try to bypass
-                page.evaluate("""() => {
-                    const btns = document.querySelectorAll('[role="button"]');
-                    for (const btn of btns) {
-                        if (btn.textContent.includes('Next')) {
-                            btn.removeAttribute('aria-disabled');
-                            btn.click(); return 'Clicked Next';
+            # Check for verification and try bypass
+            try:
+                bt = page.locator('body').inner_text()
+                if "confirm it's you" in bt.lower() or "help us confirm" in bt.lower():
+                    log("  🔒 Verification challenge!")
+                    page.evaluate("""() => {
+                        const btns = document.querySelectorAll('[role="button"]');
+                        for (const btn of btns) {
+                            if (btn.textContent.includes('Next')) {
+                                btn.removeAttribute('aria-disabled');
+                                btn.click(); return;
+                            }
                         }
-                    }
-                    return 'No Next';
-                }""")
-                time.sleep(5)
-                ss(page)
-
-        # ─── USERNAME TAKEN RETRY ───
-        for retry in range(5):
-            body_text = ""
-            try: body_text = page.locator('body').inner_text()
+                    }""")
+                    time.sleep(5)
+                    ss(page)
             except: pass
-            if "not available" not in body_text and "already taken" not in body_text:
-                break
-            username = f"{full_name.replace(' ','').lower()}{random.randint(100,99999)}"
-            log(f"  ⚠️ Username taken! New: {username}")
+
+        # ─── USERNAME RETRY ───
+        for retry in range(5):
+            try:
+                bt = page.locator('body').inner_text()
+                if "not available" not in bt and "already taken" not in bt: break
+            except: pass
+            uname = f"{full_name.replace(' ','').lower()}{random.randint(100,99999)}"
+            log(f"  ⚠️ Username taken! New: {uname}")
             page.evaluate("""(nu) => {
                 const inputs = document.querySelectorAll('input');
                 for (const inp of inputs) {
                     if (inp.type === 'search' || inp.getAttribute('aria-label') === 'Username') {
                         inp.disabled = false;
                         const s = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-                        s.call(inp, nu);
-                        inp.dispatchEvent(new Event('input', {bubbles:true}));
-                        inp.dispatchEvent(new Event('change', {bubbles:true}));
-                        break;
+                        s.call(inp, nu); inp.dispatchEvent(new Event('input', {bubbles:true}));
+                        inp.dispatchEvent(new Event('change', {bubbles:true})); break;
                     }
                 }
-            }""", username)
+            }""", uname)
             time.sleep(1)
-            # Resubmit
             page.evaluate("""() => {
                 const btns = document.querySelectorAll('[role="button"]');
-                for (const btn of btns) {
-                    if (btn.textContent.includes('Submit')) {
-                        btn.click(); return;
-                    }
-                }
+                for (const btn of btns) { if (btn.textContent.includes('Submit')) { btn.click(); return; } }
             }""")
-            time.sleep(8)
-            ss(page)
+            time.sleep(8); ss(page)
 
         # ─── FINAL ───
         time.sleep(5)
         ss(page)
-        current_url = page.url
-        log(f"📄 Final URL: {current_url[:120]}")
+        cur = page.url
+        log(f"📄 Final URL: {cur[:120]}")
 
-        is_success = False
+        is_ok = account_created or False
         try:
             bt = page.locator('body').inner_text()
-            if any(kw in bt.lower() for kw in ["welcome","let's go","start exploring","logged in","find people","save your login","you're logged in","signed in"]):
-                is_success = True
-                log("✅ SUCCESS!")
+            for kw in ["welcome","let's go","start exploring","logged in","find people","save your login","you're logged in","signed in"]:
+                if kw.lower() in bt.lower(): is_ok = True; log("✅ SUCCESS!"); break
         except: pass
-
-        if "emailsignup" not in current_url and "signup" not in current_url:
-            is_success = True
-            log("✅ Navigated away!")
+        if "emailsignup" not in cur and "signup" not in cur: is_ok = True; log("✅ Navigated away!")
 
         with lock:
             latest_credentials = {
-                'email': phone, 'username': username, 'password': password,
-                'full_name': full_name, 'status': 'success' if is_success else 'completed',
-                'final_url': current_url[:120],
+                'email': email, 'username': uname, 'password': pwd,
+                'full_name': full_name, 'status': 'success' if is_ok else 'completed',
+                'verification_code': code or '',
+                'final_url': cur[:120],
             }
-        log(f"🏁 Done: {username} | success={is_success}")
+        log(f"🏁 Done: {uname} | success={is_ok}")
         p.stop()
 
     except Exception as e:
