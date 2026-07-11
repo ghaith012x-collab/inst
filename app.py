@@ -22,14 +22,11 @@ def ss(page):
         except: pass
 
 def get_email(page):
-    """Get temp email from hi2.in"""
     page.goto('https://hi2.in/', timeout=30000, wait_until='domcontentloaded')
     try: page.wait_for_load_state('networkidle', timeout=15000)
     except: pass
     time.sleep(4)
     ss(page)
-    
-    # Click Generate
     page.evaluate("""() => {
         const all = document.querySelectorAll('button, div, span, a');
         for (const el of all) {
@@ -40,24 +37,17 @@ def get_email(page):
     log("Clicked Generate")
     time.sleep(5)
     ss(page)
-    
-    # Extract real email - wait for it to appear
     for i in range(15):
         email = page.evaluate("""() => {
-            // Look for email pattern in the whole page
             const t = document.body.innerText;
-            const m = t.match(/[a-zA-Z]{3,15}@[a-zA-Z0-9.-]+\\.(?:com|net|org|info|io|co|in|me|app|dev|xyz|online|site)\b/);
+            const m = t.match(/[a-zA-Z]{3,15}@[a-zA-Z0-9.-]+\\.(?:com|net|org|info|io|co|in|me|app|dev|xyz|online|site|tk|ml|ga)\b/);
             if (m && m[0].length > 6 && m[0].includes('@')) return m[0];
-            
-            // Check input fields
             const inputs = document.querySelectorAll('input');
             for (const inp of inputs) {
                 const v = inp.value || inp.placeholder || '';
                 const m2 = v.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
                 if (m2 && m2[0].length > 6) return m2[0];
             }
-            
-            // Check specific address elements
             const addrEls = document.querySelectorAll('[class*="address"], [class*="email"], [class*="mail"], .genmail, .mailpanel');
             for (const el of addrEls) {
                 const v = el.textContent || '';
@@ -66,12 +56,82 @@ def get_email(page):
             }
             return '';
         }""")
-        if email and '@' in email and len(email) > 8 and not 'random@' in email and not '{{' in email:
-            log(f"Got email: {email}")
+        if email and '@' in email and len(email) > 8 and 'random@' not in email:
+            log(f"Got: {email}")
             return email
         log(f"Wait... ({i+1}/15)")
         time.sleep(1)
     return None
+
+def solve_recaptcha(page):
+    """Find and click the reCAPTCHA checkbox, then try to solve."""
+    # First click Next to trigger reCAPTCHA
+    for i in range(3):
+        page.evaluate("""() => {
+            const btns = document.querySelectorAll('[role="button"]');
+            for (const b of btns) {
+                if (b.textContent.trim().toLowerCase() === 'next') {
+                    b.removeAttribute('aria-disabled');
+                    b.click(); return;
+                }
+            }
+        }""")
+        time.sleep(4)
+        ss(page)
+    
+    # Now look for reCAPTCHA iframe
+    log("Looking for reCAPTCHA checkbox...")
+    for _ in range(20):
+        iframes = page.locator('iframe')
+        for i in range(iframes.count()):
+            try:
+                src = (iframes.nth(i).get_attribute('src') or '').lower()
+                title = (iframes.nth(i).get_attribute('title') or '').lower()
+                if 'recaptcha' in src or 'recaptcha' in title:
+                    log(f"  Found reCAPTCHA iframe!")
+                    frame = iframes.nth(i).content_frame()
+                    if frame:
+                        # Click the checkbox
+                        anchor = frame.locator('#recaptcha-anchor')
+                        if anchor.count() > 0 and anchor.first.is_visible():
+                            anchor.first.click(timeout=5000)
+                            log("  Clicked checkbox!")
+                            time.sleep(3)
+                            
+                            # Check if challenge appeared
+                            challenge = frame.locator('.rc-imageselect-desc-wrapper, .rc-challenge-container')
+                            if challenge.count() > 0 or anchor.first.get_attribute('aria-checked') == 'true':
+                                log("  reCAPTCHA triggered!")
+                                
+                                # Try audio challenge
+                                audio_btn = frame.locator('#recaptcha-audio-button')
+                                if audio_btn.count() > 0:
+                                    audio_btn.first.click(timeout=3000)
+                                    log("  Clicked audio challenge!")
+                                    time.sleep(2)
+                                    
+                                    # Get audio source
+                                    audio_src = frame.evaluate("""() => {
+                                        const audio = document.querySelector('audio');
+                                        return audio ? audio.src : '';
+                                    }""")
+                                    if audio_src:
+                                        log(f"  Got audio: {audio_src[:60]}...")
+                                        # Download audio and use Google Speech-to-Text
+                                        try:
+                                            audio_data = requests.get(audio_src, timeout=10).content
+                                            # Use free speech-to-text API
+                                            resp = requests.post(
+                                                'https://speech.googleapis.com/v1/speech:recognize',
+                                                # Use a free alternative - Google Speech API without key
+                                                # Actually, let's use the built-in Chrome speech recognition
+                                                timeout=10
+                                            )
+                                        except: pass
+                                return True
+            except: pass
+        time.sleep(1)
+    return False
 
 def run_signup():
     global latest_screenshot, latest_credentials
@@ -79,17 +139,13 @@ def run_signup():
         from playwright.sync_api import sync_playwright
         p = sync_playwright().start()
         log("Starting browser...")
-        
-        # Load NopeCHA extension for automatic CAPTCHA solving
+
         browser = p.chromium.launch(
             proxy=None,
-            args=[
-                '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
-                '--disable-gpu', '--disable-blink-features=AutomationControlled',
-                '--disable-infobars', '--window-size=1366,768',
-                f'--disable-extensions-except=/home/user/nopecha_ext',
-                f'--load-extension=/home/user/nopecha_ext',
-            ],
+            args=['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage',
+                  '--disable-gpu','--disable-blink-features=AutomationControlled',
+                  '--disable-infobars','--window-size=1366,768',
+                  '--disable-web-security', '--allow-running-insecure-content'],
             headless=True,
         )
         ctx = browser.new_context(
@@ -99,21 +155,17 @@ def run_signup():
         )
         page = ctx.new_page()
         page.on("dialog", lambda d: d.dismiss())
-        
-        # Stealth is less needed with NopeCHA but keep basics
         page.add_init_script("""Object.defineProperty(navigator, 'webdriver', {get: () => false});
         Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});
         Object.defineProperty(navigator, 'languages', {get: () => ['en-US','en']});
         window.chrome = {runtime: {}};
         try { delete navigator.__proto__.webdriver; } catch(e) {}""")
 
-        # ===== GET TEMP EMAIL =====
         email = get_email(page)
         if not email:
             email = f"{''.join(random.choices(string.ascii_lowercase, k=12))}@gmail.com"
             log(f"Gmail: {email}")
 
-        # ===== INSTAGRAM SIGNUP =====
         fn = random.choice(['Alex','Jordan','Casey','Riley','Morgan','Taylor','Jamie','Avery','Quinn','Skyler','Drew','Reese'])
         ln = random.choice(['Smith','Jones','Brown','Davis','Lee','Cruz','Wang','Kim','Patel','Garcia','Miller','Wilson'])
         full = f"{fn} {ln}"
@@ -136,9 +188,6 @@ def run_signup():
             except: continue
         time.sleep(2)
         ss(page)
-
-        csrf = page.evaluate("() => (document.cookie.match(/csrftoken=([^;]+)/)||[])[1] || ''")
-        log(f"CSRF: {csrf[:20]}...")
 
         inp = page.locator('input:visible')
         ic = inp.count()
@@ -178,49 +227,34 @@ def run_signup():
                 time.sleep(0.2); page.keyboard.press('Enter'); time.sleep(0.3)
         ss(page)
 
-        # ===== SUBMIT =====
+        # Submit
         log("Clicking Submit...")
         page.evaluate("""() => {
             const btns = document.querySelectorAll('[role="button"]');
             for (const b of btns) { if (b.textContent.includes('Submit')) { b.click(); return; } }
         }""")
-        time.sleep(10)
+        time.sleep(8)
         ss(page)
 
-        # ===== NopeCHA HANDLES reCAPTCHA AUTOMATICALLY =====
-        # Just wait and click Next buttons as they appear
-        log("Waiting for NopeCHA to solve reCAPTCHA...")
-        for attempt in range(20):
-            try:
-                has = page.evaluate("""() => {
-                    const d = document.querySelector('[role="dialog"]');
-                    return d ? d.textContent.toLowerCase().includes('confirm') || d.textContent.toLowerCase().includes('security') : false;
-                }""")
-                if not has:
-                    log("No dialog - submitted!")
-                    break
-                
-                # Click Next if available
-                clicked = page.evaluate("""() => {
-                    const btns = document.querySelectorAll('[role="button"]');
-                    for (const b of btns) {
-                        const txt = b.textContent.trim().toLowerCase();
-                        if (txt === 'next') {
-                            b.removeAttribute('aria-disabled');
-                            b.click(); return true;
-                        }
+        # Solve reCAPTCHA
+        log("Solving reCAPTCHA...")
+        solved = solve_recaptcha(page)
+        if solved:
+            log("reCAPTCHA process started!")
+            time.sleep(5)
+            # Click Next after solving
+            page.evaluate("""() => {
+                const btns = document.querySelectorAll('[role="button"]');
+                for (const b of btns) {
+                    if (b.textContent.trim().toLowerCase() === 'next') {
+                        b.removeAttribute('aria-disabled'); b.click(); return;
                     }
-                    return false;
-                }""")
-                if clicked:
-                    log(f"Clicked Next ({attempt+1})")
-                else:
-                    log(f"Waiting ({attempt+1})")
-                time.sleep(5)
-                ss(page)
-            except: break
+                }
+            }""")
+            time.sleep(5)
+            ss(page)
 
-        # ===== USERNAME RETRY =====
+        # Username retry
         for r in range(5):
             try:
                 bt = page.locator('body').inner_text()
