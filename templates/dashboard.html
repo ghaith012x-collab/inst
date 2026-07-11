@@ -1,178 +1,84 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Live Automation Dashboard</title>
+    <title>🔥 InstaBot Dashboard</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { 
-            background: #0a0a0a; 
-            color: #00ff41; 
-            font-family: 'Courier New', monospace;
-            padding: 20px;
-        }
+        body { background: #0a0a0a; color: #00ff41; font-family: 'Courier New', monospace; padding: 20px; }
         h1 { text-align: center; margin-bottom: 20px; text-shadow: 0 0 10px #00ff41; }
         .container { display: flex; gap: 20px; max-width: 1400px; margin: 0 auto; }
         .left-panel { flex: 2; }
         .right-panel { flex: 1; min-width: 380px; }
-        #live-cam { 
-            width: 100%; 
-            height: 600px; 
-            border: 3px solid #00ff41; 
-            background: #111;
-            box-shadow: 0 0 20px rgba(0,255,65,0.3);
-            object-fit: contain;
-        }
-        .panel { 
-            background: #151515; 
-            border: 1px solid #333; 
-            padding: 15px; 
-            margin-bottom: 15px;
-            border-radius: 4px;
-        }
+        #live-cam { width: 100%; height: 600px; border: 3px solid #00ff41; background: #111; object-fit: contain; box-shadow: 0 0 20px rgba(0,255,65,0.3); }
+        .panel { background: #151515; border: 1px solid #333; padding: 15px; margin-bottom: 15px; border-radius: 4px; }
         .panel h3 { color: #fff; margin-bottom: 10px; border-bottom: 1px solid #333; padding-bottom: 5px; }
         button {
-            width: 100%;
-            padding: 20px;
-            font-size: 18px;
-            background: #00ff41;
-            color: #000;
-            border: none;
-            cursor: pointer;
-            font-weight: bold;
-            margin-bottom: 15px;
-            border-radius: 4px;
-            transition: all 0.3s;
+            width: 100%; padding: 20px; font-size: 18px;
+            background: #00ff41; color: #000; border: none;
+            cursor: pointer; font-weight: bold; margin-bottom: 15px;
+            border-radius: 4px; transition: all 0.3s;
         }
         button:hover:not(:disabled) { background: #00cc33; box-shadow: 0 0 15px #00ff41; }
         button:disabled { background: #555; color: #999; cursor: not-allowed; }
-        #log { 
-            height: 250px; 
-            overflow-y: auto; 
-            background: #0d0d0d; 
-            padding: 10px; 
-            border: 1px solid #333;
-            font-size: 12px;
-            font-family: 'Courier New', monospace;
-            white-space: pre-wrap;
-            word-break: break-all;
-        }
+        #log { height: 250px; overflow-y: auto; background: #0d0d0d; padding: 10px; border: 1px solid #333; font-size: 12px; white-space: pre-wrap; word-break: break-all; }
         .log-line { margin: 1px 0; border-bottom: 1px solid #111; padding: 1px 0; }
         .cred-row { display: flex; justify-content: space-between; margin: 8px 0; font-size: 13px; }
         .cred-label { color: #888; }
         .cred-value { color: #fff; word-break: break-all; }
-        .status-indicator {
-            display: inline-block;
-            width: 10px; height: 10px;
-            border-radius: 50%;
-            background: #ff4444;
-            margin-right: 8px;
-            animation: pulse 2s infinite;
-        }
+        .status-indicator { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #ff4444; margin-right: 8px; animation: pulse 2s infinite; }
         .status-active { background: #00ff41; }
-        .status-success { background: #00ff41; }
-        .status-error { background: #ff4444; }
         @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
         .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
         .stat-box { background: #1a1a1a; padding: 10px; text-align: center; border-radius: 3px; }
         .stat-num { font-size: 24px; color: #00ff41; }
         .stat-label { font-size: 11px; color: #888; margin-top: 5px; }
-        .success-badge { 
-            display: inline-block;
-            background: #00ff41;
-            color: #000;
-            padding: 2px 8px;
-            border-radius: 3px;
-            font-size: 11px;
-            font-weight: bold;
-        }
-        .waiting-badge {
-            display: inline-block;
-            background: #ffaa00;
-            color: #000;
-            padding: 2px 8px;
-            border-radius: 3px;
-            font-size: 11px;
-            font-weight: bold;
-        }
+        .success-badge { display: inline-block; background: #00ff41; color: #000; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: bold; }
+        .waiting-badge { display: inline-block; background: #ffaa00; color: #000; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: bold; }
     </style>
 </head>
 <body>
-    <h1>🔴 LIVE AUTOMATION FEED</h1>
-    
+    <h1>🔥 LIVE INSTAGRAM AUTOMATION</h1>
     <div class="container">
         <div class="left-panel">
             <div class="panel">
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
                     <span><span class="status-indicator" id="cam-status"></span>BROWSER VIEW</span>
-                    <span style="color:#888; font-size:12px;">1 FPS STREAM</span>
+                    <span style="color:#888;font-size:12px">LIVE STREAM</span>
                 </div>
                 <img id="live-cam" src="/stream" alt="Live browser feed">
             </div>
         </div>
-        
         <div class="right-panel">
             <button id="create-btn" onclick="createAccount()">🚀 CREATE ACCOUNT</button>
-            
             <div class="panel">
                 <h3>📊 SESSION STATS</h3>
                 <div class="stats">
-                    <div class="stat-box">
-                        <div class="stat-num" id="stat-attempts">0</div>
-                        <div class="stat-label">ATTEMPTS</div>
-                    </div>
-                    <div class="stat-box">
-                        <div class="stat-num" id="stat-success">0</div>
-                        <div class="stat-label">SUCCESS</div>
-                    </div>
-                </div>
-                <div style="margin-top:10px; text-align:center;">
-                    <span id="account-status-badge" style="display:none;"></span>
+                    <div class="stat-box"><div class="stat-num" id="stat-attempts">0</div><div class="stat-label">ATTEMPTS</div></div>
+                    <div class="stat-box"><div class="stat-num" id="stat-success">0</div><div class="stat-label">SUCCESS</div></div>
                 </div>
             </div>
-            
             <div class="panel">
-                <h3>🔑 LAST CREDENTIALS</h3>
-                <div class="cred-row">
-                    <span class="cred-label">Email:</span>
-                    <span class="cred-value" id="last-email">waiting...</span>
-                </div>
-                <div class="cred-row">
-                    <span class="cred-label">Full Name:</span>
-                    <span class="cred-value" id="last-name">waiting...</span>
-                </div>
-                <div class="cred-row">
-                    <span class="cred-label">Username:</span>
-                    <span class="cred-value" id="last-user">waiting...</span>
-                </div>
-                <div class="cred-row">
-                    <span class="cred-label">Password:</span>
-                    <span class="cred-value" id="last-pass">waiting...</span>
-                </div>
-                <div class="cred-row">
-                    <span class="cred-label">Status:</span>
-                    <span class="cred-value" id="last-status">waiting...</span>
-                </div>
+                <h3>🔑 CREDENTIALS</h3>
+                <div class="cred-row"><span class="cred-label">Email:</span><span class="cred-value" id="last-email">waiting...</span></div>
+                <div class="cred-row"><span class="cred-label">Full Name:</span><span class="cred-value" id="last-name">waiting...</span></div>
+                <div class="cred-row"><span class="cred-label">Username:</span><span class="cred-value" id="last-user">waiting...</span></div>
+                <div class="cred-row"><span class="cred-label">Password:</span><span class="cred-value" id="last-pass">waiting...</span></div>
+                <div class="cred-row"><span class="cred-label">Status:</span><span class="cred-value" id="last-status">waiting...</span></div>
+                <div class="cred-row"><span class="cred-label">Verification Code:</span><span class="cred-value" id="last-code">waiting...</span></div>
             </div>
-            
             <div class="panel">
-                <h3>📜 LIVE SERVER LOGS</h3>
+                <h3>📜 LOGS</h3>
                 <div id="log">Loading logs...</div>
             </div>
         </div>
     </div>
-
     <script>
-        let attempts = 0;
-        let successes = 0;
-        let running = false;
-        let logPoll;
-
+        let attempts = 0, successes = 0, running = false;
         function addLog(msg) {
             const div = document.getElementById('log');
             div.innerHTML += `<div class="log-line">${msg}</div>`;
             div.scrollTop = div.scrollHeight;
         }
-
         async function pollLogs() {
             try {
                 const res = await fetch('/logs');
@@ -181,31 +87,25 @@
                 lines.forEach(l => addLog(l));
             } catch(e) {}
         }
-        logPoll = setInterval(pollLogs, 1000);
-
+        setInterval(pollLogs, 1000);
         async function createAccount() {
             if (running) return;
             running = true;
             const btn = document.getElementById('create-btn');
             btn.disabled = true;
             btn.textContent = '⏳ RUNNING...';
-            
             attempts++;
             document.getElementById('stat-attempts').textContent = attempts;
             document.getElementById('cam-status').classList.add('status-active');
-
             try {
-                const res = await fetch('/create', {method: 'POST'});
-                const data = await res.json();
+                await fetch('/create', {method: 'POST'});
                 addLog('[client] Worker started');
-
                 let waited = 0;
                 const poll = setInterval(async () => {
                     waited++;
                     try {
                         const credRes = await fetch('/credentials');
                         const creds = await credRes.json();
-                        
                         if (creds.username) {
                             clearInterval(poll);
                             document.getElementById('last-email').textContent = creds.email;
@@ -213,42 +113,33 @@
                             document.getElementById('last-user').textContent = creds.username;
                             document.getElementById('last-pass').textContent = creds.password;
                             document.getElementById('last-status').textContent = creds.status;
-
-                            const badge = document.getElementById('account-status-badge');
-                            badge.style.display = 'inline';
+                            document.getElementById('last-code').textContent = creds.verification_code || '-';
                             if (creds.status === 'success') {
                                 successes++;
                                 document.getElementById('stat-success').textContent = successes;
-                                badge.className = 'success-badge';
-                                badge.textContent = '✅ ACCOUNT CREATED';
-                                addLog('[client] ✅ SUCCESS - Account created!');
+                                addLog('[client] ✅ SUCCESS!');
                             } else {
-                                badge.className = 'waiting-badge';
-                                badge.textContent = '⏳ SUBMITTED (check email)';
-                                addLog('[client] ✅ Flow completed');
+                                addLog('[client] ⏳ Completed (needs verification)');
                             }
                             resetButton();
                         } else if (creds.error) {
                             clearInterval(poll);
-                            addLog('[client] ❌ ERROR: ' + creds.error);
-                            document.getElementById('last-status').textContent = 'ERROR: ' + creds.error;
+                            addLog('[client] ❌ ' + creds.error);
+                            document.getElementById('last-status').textContent = 'ERROR';
                             resetButton();
                         }
                     } catch(e) {}
-                    
-                    if (waited > 60) {
+                    if (waited > 90) {
                         clearInterval(poll);
-                        addLog('[client] ⚠️ Timed out (60s)');
+                        addLog('[client] ⚠️ Timed out');
                         resetButton();
                     }
                 }, 1000);
-
             } catch(e) {
                 addLog('[client] ❌ ' + e.message);
                 resetButton();
             }
         }
-
         function resetButton() {
             running = false;
             const btn = document.getElementById('create-btn');
@@ -256,7 +147,6 @@
             btn.textContent = '🚀 CREATE ACCOUNT';
             document.getElementById('cam-status').classList.remove('status-active');
         }
-
         addLog('[client] ✅ Dashboard ready.');
     </script>
 </body>
