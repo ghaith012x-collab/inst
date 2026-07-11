@@ -40,11 +40,16 @@ def get_email(page):
     for i in range(15):
         email = page.evaluate("""() => {
             const t = document.body.innerText;
-            const m = t.match(/[a-zA-Z]{3,15}@[a-zA-Z0-9.-]+\\.(?:com|net|org|info|io|co|in|me|app|dev|xyz|online|site|tk|ml|ga)\\b/);
-            if (m && m[0].length > 6 && m[0].includes('@')) return m[0];
+            const m = t.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+            if (m && m[0].length > 6 && m[0].includes('@') && !m[0].includes('random@') && !m[0].includes('{{')) return m[0];
+            // Also check input values
+            const inputs = document.querySelectorAll('input[type="text"], input[type="email"]');
+            for (const inp of inputs) {
+                if (inp.value && inp.value.includes('@')) return inp.value;
+            }
             return '';
         }""")
-        if email and '@' in email and len(email) > 8 and 'random@' not in email:
+        if email and '@' in email and len(email) > 8 and 'random@' not in email and '{{' not in email:
             log(f"Got: {email}")
             return email
         log(f"Wait... ({i+1}/15)")
