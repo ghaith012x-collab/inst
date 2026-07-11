@@ -216,7 +216,9 @@ def run_signup():
 
         # Handle dialog + reCAPTCHA
         log("Handling dialog...")
-        for attempt in range(12):
+        # FIRST: Click Next to get past the "Help us confirm it's you" screen
+        # This triggers the reCAPTCHA to load
+        for attempt in range(5):
             try:
                 has = page.evaluate("""() => {
                     const d = document.querySelector('[role="dialog"]');
@@ -225,37 +227,38 @@ def run_signup():
                 if not has:
                     log("Done! No dialog.")
                     break
-                
-                log(f"Dialog ({attempt+1})")
-                
-                # First try clicking the recaptcha checkbox
-                rc = click_recaptcha(page)
-                if rc:
-                    log("reCAPTCHA solved! Clicking Next...")
-                    click_next(page)
-                    time.sleep(5)
-                    ss(page)
-                    # Check if we need to click Next again (image challenge)
-                    has2 = page.evaluate("""() => {
-                        const d = document.querySelector('[role="dialog"]');
-                        return d ? true : false;
-                    }""")
-                    if not has2:
-                        log("Form submitted!")
-                        break
-                    else:
-                        log("Second dialog - clicking Next...")
-                        click_next(page)
-                        time.sleep(5)
-                        ss(page)
-                else:
-                    log("No recaptcha, clicking Next anyway...")
-                    click_next(page)
-                    time.sleep(5)
-                    ss(page)
-            except Exception as e:
-                log(f"Err: {e}")
-                break
+                log(f"Dialog - clicking Next ({attempt+1})")
+                click_next(page)
+                time.sleep(5)
+                ss(page)
+            except: break
+        
+        # NOW: Look for reCAPTCHA iframe and click it
+        log("Looking for reCAPTCHA...")
+        rc = click_recaptcha(page)
+        if rc:
+            log("reCAPTCHA solved! Clicking Next...")
+            click_next(page)
+            time.sleep(5)
+            ss(page)
+            # Check if we need to click Next again (image challenge)
+            has2 = page.evaluate("""() => {
+                const d = document.querySelector('[role="dialog"]');
+                return d ? true : false;
+            }""")
+            if not has2:
+                log("Form submitted!")
+            else:
+                log("Second dialog - clicking Next...")
+                click_next(page)
+                time.sleep(5)
+                ss(page)
+        else:
+            log("No reCAPTCHA found")
+            # Try clicking Next again just in case
+            click_next(page)
+            time.sleep(5)
+            ss(page)
 
         # Username retry
         for r in range(5):
