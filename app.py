@@ -21,67 +21,6 @@ def ss(page):
         try: latest_screenshot = page.screenshot(type='jpeg', quality=70)
         except: pass
 
-def get_hi2_email():
-    """Get temp email from hi2.in"""
-    from playwright.sync_api import sync_playwright
-    p = sync_playwright().start()
-    b = p.chromium.launch(args=['--no-sandbox'], headless=True)
-    page = b.new_page()
-    page.goto('https://hi2.in/', timeout=30000, wait_until='domcontentloaded')
-    time.sleep(4)
-    
-    # Click Generate
-    page.evaluate("""() => {
-        const all = document.querySelectorAll('button, div, span, a');
-        for (const el of all) {
-            if (el.textContent.trim().toLowerCase() === 'generate' && el.offsetParent !== null) {
-                el.click(); return;
-            }
-        }
-    }""")
-    time.sleep(5)
-    
-    # Get email
-    email = ''
-    for i in range(15):
-        email = page.evaluate("""() => {
-            const t = document.body.innerText;
-            const m = t.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}/);
-            if (m && m[0].length > 6 && m[0].includes('@') && !m[0].includes('random@')) return m[0];
-            return '';
-        }""")
-        if email and '@' in email:
-            break
-        time.sleep(1)
-    
-    b.close()
-    p.stop()
-    return email
-
-def check_hi2_inbox(token=None):
-    """Check hi2.in for verification code"""
-    from playwright.sync_api import sync_playwright
-    p = sync_playwright().start()
-    b = p.chromium.launch(args=['--no-sandbox'], headless=True)
-    page = b.new_page()
-    
-    code = None
-    for _ in range(15):
-        page.goto('https://hi2.in/', timeout=30000, wait_until='domcontentloaded')
-        time.sleep(3)
-        page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)")
-        time.sleep(2)
-        txt = page.evaluate("() => document.body.innerText")
-        codes = re.findall(r'\\b(\\d{5,6})\\b', txt)
-        if codes:
-            code = codes[0]
-            break
-        time.sleep(5)
-    
-    b.close()
-    p.stop()
-    return code
-
 def run_signup():
     global latest_screenshot, latest_credentials
     try:
@@ -103,28 +42,54 @@ def run_signup():
         )
         page = ctx.new_page()
         page.on("dialog", lambda d: d.dismiss())
-        page.add_init_script("""Object.defineProperty(navigator, 'webdriver', {get: () => false});
-        Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});
-        Object.defineProperty(navigator, 'languages', {get: () => ['en-US','en']});
-        window.chrome = {runtime: {}};
-        try { delete navigator.__proto__.webdriver; } catch(e) {}""")
+        page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => false});Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});Object.defineProperty(navigator, 'languages', {get: () => ['en-US','en']});window.chrome = {runtime: {}};try { delete navigator.__proto__.webdriver; } catch(e) {}")
 
-        # Step 1: First get hi2.in email in a separate page
-        log("Getting temp email from hi2.in...")
-        email = get_hi2_email()
+        # STEP 1: Get hi2.in email in same session
+        log("Getting hi2.in email...")
+        page.goto('https://hi2.in/', timeout=30000, wait_until='domcontentloaded')
+        try: page.wait_for_load_state('networkidle', timeout=15000)
+        except: pass
+        time.sleep(4)
+        ss(page)
+
+        page.evaluate("""() => {
+            const all = document.querySelectorAll('button, div, span, a');
+            for (const el of all) {
+                if (el.textContent.trim().toLowerCase() === 'generate' && el.offsetParent !== null) {
+                    el.click(); return;
+                }
+            }
+        }""")
+
+        log("Clicked Generate")
+        time.sleep(5)
+        ss(page)
+
+        email = ''
+        for i in range(15):
+            email = page.evaluate("""() => {
+                const t = document.body.innerText;
+                const m = t.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}/);
+                if (m && m[0].length > 6 && m[0].includes('@') && !m[0].includes('random@')) return m[0];
+                return '';
+            }""")
+            if email and '@' in email:
+                log(f"Got: {email}")
+                break
+            time.sleep(1)
+
         if not email:
             email = f"{''.join(random.choices(string.ascii_lowercase, k=12))}@gmail.com"
-        log(f"Email: {email}")
 
-        # Step 2: Gen creds
+        # STEP 2: Gen creds
         fn = random.choice(['Alex','Jordan','Casey','Riley','Morgan','Taylor','Jamie','Avery','Quinn','Skyler','Drew','Reese'])
         ln = random.choice(['Smith','Jones','Brown','Davis','Lee','Cruz','Wang','Kim','Patel','Garcia','Miller','Wilson'])
         full = f"{fn} {ln}"
         uname = f"{fn.lower()}{ln.lower()}{random.randint(1000,99999)}"
         pwd = ''.join(random.choices(string.ascii_letters+string.digits+'!@#$', k=14))
-        log(f"name={full} user={uname}")
+        log(f"name={full} user={uname} email={email}")
 
-        # Step 3: Load Instagram
+        # STEP 3: Instagram
         log("Loading Instagram...")
         page.goto('https://www.instagram.com/accounts/emailsignup/', timeout=30000, wait_until='domcontentloaded')
         try: page.wait_for_load_state('networkidle', timeout=15000)
@@ -141,11 +106,9 @@ def run_signup():
         time.sleep(2)
         ss(page)
 
-        # Get CSRF token
         csrf = page.evaluate("() => (document.cookie.match(/csrftoken=([^;]+)/)||[])[1] || ''")
         log(f"CSRF: {csrf[:20]}...")
 
-        # Step 4: Fill form
         inp = page.locator('input:visible')
         ic = inp.count()
 
@@ -182,7 +145,7 @@ def run_signup():
                 time.sleep(0.2); page.keyboard.press('Enter'); time.sleep(0.3)
         ss(page)
 
-        # Step 5: Submit via API
+        # STEP 4: Submit via API
         log("Submitting via API...")
         t = int(time.time())
         ep = f"#PWD_INSTAGRAM_BROWSER:0:{t}:{pwd}"
@@ -208,19 +171,19 @@ def run_signup():
         account_created = '"account_created":true' in body_str
         needs_code = 'force_sign_up_code' in body_str
 
-        # Step 6: If verification code needed, click Submit in UI to trigger email, then check hi2.in
+        # STEP 5: Handle verification + check hi2.in inbox
         code = None
         if needs_code:
-            log("Email verification required! Clicking UI Submit to trigger...")
+            log("Verification needed! Clicking Submit via UI to trigger email...")
             page.evaluate("""() => {
                 const btns = document.querySelectorAll('[role="button"]');
                 for (const b of btns) { if (b.textContent.includes('Submit')) { b.click(); return; } }
             }""")
             time.sleep(5)
             ss(page)
-            
-            # Click Next through any dialogs
-            for i in range(3):
+
+            # Click Next through security dialogs 
+            for i in range(8):
                 page.evaluate("""() => {
                     const btns = document.querySelectorAll('[role="button"]');
                     for (const b of btns) {
@@ -231,14 +194,35 @@ def run_signup():
                 }""")
                 time.sleep(5)
                 ss(page)
-            
-            # Check hi2.in for verification code
-            log("Checking hi2.in for verification code...")
-            code = check_hi2_inbox()
-            
+
+            # Now check hi2.in inbox - navigate there
+            log("Checking hi2.in inbox for code...")
+            page.goto('https://hi2.in/', timeout=30000, wait_until='domcontentloaded')
+            time.sleep(3)
+            page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)")
+            time.sleep(2)
+            ss(page)
+
+            for loop in range(12):
+                txt = page.evaluate("() => document.body.innerText")
+                codes = re.findall(r'\\b(\\d{5,6})\\b', txt)
+                if codes:
+                    code = codes[0]
+                    log(f"CODE FOUND: {code}")
+                    break
+                log(f"Check ({loop+1}/12)")
+                page.reload(timeout=30000, wait_until='domcontentloaded')
+                time.sleep(3)
+                page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)")
+                time.sleep(2)
+                ss(page)
+
             if code:
-                log(f"Got verification code: {code}")
-                # Submit code via API
+                # Go back to Instagram and submit code
+                page.goto('https://www.instagram.com/accounts/emailsignup/', timeout=30000, wait_until='domcontentloaded')
+                time.sleep(3)
+                ss(page)
+
                 cr = page.evaluate("""(args) => {
                     const [c, code] = args;
                     const fd = new URLSearchParams();
@@ -254,9 +238,8 @@ def run_signup():
                     account_created = True
                     log("ACCOUNT CREATED!")
                 time.sleep(3)
-                ss(page)
 
-        # Step 7: Username retry
+        # STEP 6: Username retry
         if not account_created:
             for r in range(5):
                 try:
@@ -322,9 +305,9 @@ def stream():
         while True:
             with lock:
                 if latest_screenshot:
-                    yield (b'--frame\\r\\n'
-                           b'Content-Type: image/jpeg\\r\\n\\r\\n'
-                           + latest_screenshot + b'\\r\\n')
+                    yield (b'--frame\r\n'
+                           b'Content-Type: image/jpeg\r\n\r\n'
+                           + latest_screenshot + b'\r\n')
             time.sleep(1)
     return Response(gen(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
