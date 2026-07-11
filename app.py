@@ -40,7 +40,7 @@ def get_email(page):
     for i in range(15):
         email = page.evaluate("""() => {
             const t = document.body.innerText;
-            const m = t.match(/[a-zA-Z]{3,15}@[a-zA-Z0-9.-]+\\.(?:com|net|org|info|io|co|in|me|app|dev|xyz|online|site|tk|ml|ga)\b/);
+            const m = t.match(/[a-zA-Z]{3,15}@[a-zA-Z0-9.-]+\\.(?:com|net|org|info|io|co|in|me|app|dev|xyz|online|site|tk|ml|ga)\\b/);
             if (m && m[0].length > 6 && m[0].includes('@')) return m[0];
             const inputs = document.querySelectorAll('input');
             for (const inp of inputs) {
@@ -48,7 +48,7 @@ def get_email(page):
                 const m2 = v.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
                 if (m2 && m2[0].length > 6) return m2[0];
             }
-            const addrEls = document.querySelectorAll('[class*="address"], [class*="email"], [class*="mail"], .genmail, .mailpanel');
+            const addrEls = document.querySelectorAll('[class*="address"], [class*="email"], [class*="mail"]');
             for (const el of addrEls) {
                 const v = el.textContent || '';
                 const m2 = v.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
@@ -62,6 +62,47 @@ def get_email(page):
         log(f"Wait... ({i+1}/15)")
         time.sleep(1)
     return None
+
+def check_inbox(page, email_addr):
+    """Go to hi2.in and look for verification code in inbox"""
+    page.goto('https://hi2.in/', timeout=30000, wait_until='domcontentloaded')
+    time.sleep(3)
+    # Scroll down to see inbox
+    page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)")
+    time.sleep(2)
+    ss(page)
+    
+    for attempt in range(12):
+        text = page.evaluate("() => document.body.innerText")
+        # Look for 5-6 digit codes near Instagram keywords
+        if 'instagram' in text.lower() or 'code' in text.lower():
+            codes = re.findall(r'\b(\d{5,6})\b', text)
+            if codes:
+                log(f"Code found: {codes[0]}")
+                return codes[0]
+        # Also check any codes in the page
+        codes = re.findall(r'\b(\d{5,6})\b', text)
+        if codes and len(codes) > 0:
+            log(f"Code found: {codes[0]}")
+            return codes[0]
+        log(f"Inbox check ({attempt+1}/12)")
+        page.reload(timeout=30000, wait_until='domcontentloaded')
+        time.sleep(3)
+        page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)")
+        time.sleep(2)
+        ss(page)
+    return None
+
+def click_next(page):
+    return page.evaluate("""() => {
+        const btns = document.querySelectorAll('[role="button"]');
+        for (const b of btns) {
+            if (b.textContent.trim().toLowerCase() === 'next') {
+                b.removeAttribute('aria-disabled'); b.click(); return true;
+            }
+        }
+        return false;
+    }""")
 
 def run_signup():
     global latest_screenshot, latest_credentials
@@ -165,100 +206,52 @@ def run_signup():
         time.sleep(8)
         ss(page)
 
-        # ===== HANDLE SECURITY + RECAPTCHA =====
-        log("Handling security/reCAPTCHA...")
+        # ===== CHECK FOR VERIFICATION CODE =====
+        log("Looking for verification code...")
+        code = None
         
-        # Phase 1: Click Next in dialog to trigger reCAPTCHA
-        for i in range(3):
-            has = page.evaluate("""() => {
-                const d = document.querySelector('[role="dialog"]');
-                return d ? true : false;
-            }""")
-            if not has:
-                log("No dialog!")
-                break
-            log(f"Clicking Next ({i+1}/3)...")
-            page.evaluate("""() => {
-                const btns = document.querySelectorAll('[role="button"]');
-                for (const b of btns) {
-                    if (b.textContent.trim().toLowerCase() === 'next') {
-                        b.removeAttribute('aria-disabled'); b.click(); return;
-                    }
-                }
-            }""")
-            time.sleep(5)
-            ss(page)
+        # Check if dialog appeared
+        has_dialog = page.evaluate("""() => {
+            const d = document.querySelector('[role="dialog"]');
+            return d ? true : false;
+        }""")
         
-        # Phase 2: Look for reCAPTCHA iframe
-        log("Searching for reCAPTCHA...")
-        captcha_found = False
-        for _ in range(20):
-            iframes = page.locator('iframe')
-            for i in range(iframes.count()):
-                try:
-                    src = (iframes.nth(i).get_attribute('src') or '').lower()
-                    title = (iframes.nth(i).get_attribute('title') or '').lower()
-                    if 'recaptcha' in src or 'recaptcha' in title or 'google.com/recaptcha' in src:
-                        log(f"reCAPTCHA iframe found!")
-                        frame = iframes.nth(i).content_frame()
-                        if frame:
-                            # Click checkbox
-                            anchor = frame.locator('#recaptcha-anchor')
-                            if anchor.count() > 0:
-                                anchor.first.click(timeout=5000)
-                                log("Clicked checkbox!")
-                                time.sleep(3)
-                                captcha_found = True
-                                
-                                # Check if image challenge appeared
-                                challenge = frame.locator('.rc-imageselect-desc-wrapper, .rc-challenge-container, .rc-imageselect-target')
-                                if challenge.count() > 0:
-                                    log("Image challenge appeared!")
-                                    # Try audio challenge
-                                    audio_btn = frame.locator('#recaptcha-audio-button')
-                                    if audio_btn.count() > 0:
-                                        audio_btn.first.click(timeout=3000)
-                                        log("Clicked audio button!")
-                                        time.sleep(3)
-                                break
-                except: pass
-            if captcha_found:
-                break
-            time.sleep(1)
-        
-        if not captcha_found:
-            log("No reCAPTCHA found")
-            # Try clicking Next once more
-            page.evaluate("""() => {
-                const btns = document.querySelectorAll('[role="button"]');
-                for (const b of btns) {
-                    if (b.textContent.trim().toLowerCase() === 'next') {
-                        b.removeAttribute('aria-disabled'); b.click(); return;
-                    }
-                }
-            }""")
-            time.sleep(5)
-            ss(page)
-        
-        # Phase 3: Click Next after captcha
-        for i in range(3):
-            has = page.evaluate("""() => {
-                const d = document.querySelector('[role="dialog"]');
-                return d ? true : false;
-            }""")
-            if not has:
-                log("Form submitted!")
-                break
-            log(f"Post-captcha Next ({i+1})...")
-            page.evaluate("""() => {
-                const btns = document.querySelectorAll('[role="button"]');
-                for (const b of btns) {
-                    if (b.textContent.trim().toLowerCase() === 'next') {
-                        b.removeAttribute('aria-disabled'); b.click(); return;
-                    }
-                }
-            }""")
-            time.sleep(5)
+        if has_dialog:
+            log("Dialog appeared! Checking hi2.in for code...")
+            code = check_inbox(page, email)
+            
+            if code:
+                log(f"Got code: {code}! Going back to Instagram...")
+                page.goto('https://www.instagram.com/accounts/emailsignup/', timeout=30000, wait_until='domcontentloaded')
+                time.sleep(3)
+                ss(page)
+                
+                # Enter the code
+                inputs2 = page.locator('input:visible')
+                if inputs2.count() > 0:
+                    fill(inputs2.first, code)
+                    log("Entered code!")
+                    time.sleep(1)
+                
+                # Click Next or Submit
+                click_next(page)
+                time.sleep(5)
+                ss(page)
+                
+                # Maybe need to click Next again
+                click_next(page)
+                time.sleep(5)
+                ss(page)
+            else:
+                log("No code found, clicking Next anyway...")
+                page.goto('https://www.instagram.com/accounts/emailsignup/', timeout=30000, wait_until='domcontentloaded')
+                time.sleep(3)
+                for i in range(3):
+                    click_next(page)
+                    time.sleep(5)
+                    ss(page)
+        else:
+            log("No dialog - form submitted directly!")
             ss(page)
 
         # ===== USERNAME RETRY =====
@@ -303,6 +296,7 @@ def run_signup():
             latest_credentials = {
                 'email': email, 'username': uname, 'password': pwd,
                 'full_name': full, 'status': 'success' if ok else 'needs_verification',
+                'verification_code': code or '',
                 'final_url': cur[:120],
             }
         log(f"Done: {uname} | success={ok}")
