@@ -69,11 +69,31 @@
             animation: pulse 2s infinite;
         }
         .status-active { background: #00ff41; }
+        .status-success { background: #00ff41; }
+        .status-error { background: #ff4444; }
         @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
         .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
         .stat-box { background: #1a1a1a; padding: 10px; text-align: center; border-radius: 3px; }
         .stat-num { font-size: 24px; color: #00ff41; }
         .stat-label { font-size: 11px; color: #888; margin-top: 5px; }
+        .success-badge { 
+            display: inline-block;
+            background: #00ff41;
+            color: #000;
+            padding: 2px 8px;
+            border-radius: 3px;
+            font-size: 11px;
+            font-weight: bold;
+        }
+        .waiting-badge {
+            display: inline-block;
+            background: #ffaa00;
+            color: #000;
+            padding: 2px 8px;
+            border-radius: 3px;
+            font-size: 11px;
+            font-weight: bold;
+        }
     </style>
 </head>
 <body>
@@ -105,6 +125,9 @@
                         <div class="stat-label">SUCCESS</div>
                     </div>
                 </div>
+                <div style="margin-top:10px; text-align:center;">
+                    <span id="account-status-badge" style="display:none;"></span>
+                </div>
             </div>
             
             <div class="panel">
@@ -124,6 +147,10 @@
                 <div class="cred-row">
                     <span class="cred-label">Password:</span>
                     <span class="cred-value" id="last-pass">waiting...</span>
+                </div>
+                <div class="cred-row">
+                    <span class="cred-label">Status:</span>
+                    <span class="cred-value" id="last-status">waiting...</span>
                 </div>
             </div>
             
@@ -146,16 +173,13 @@
             div.scrollTop = div.scrollHeight;
         }
 
-        // Poll server logs every second
         async function pollLogs() {
             try {
                 const res = await fetch('/logs');
                 const lines = await res.json();
                 document.getElementById('log').innerHTML = '';
                 lines.forEach(l => addLog(l));
-            } catch(e) {
-                // ignore fetch errors during cold start
-            }
+            } catch(e) {}
         }
         logPoll = setInterval(pollLogs, 1000);
 
@@ -175,7 +199,6 @@
                 const data = await res.json();
                 addLog('[client] Worker started');
 
-                // Poll for credentials
                 let waited = 0;
                 const poll = setInterval(async () => {
                     waited++;
@@ -185,24 +208,37 @@
                         
                         if (creds.username) {
                             clearInterval(poll);
-                            successes++;
-                            document.getElementById('stat-success').textContent = successes;
                             document.getElementById('last-email').textContent = creds.email;
                             document.getElementById('last-name').textContent = creds.full_name || '-';
                             document.getElementById('last-user').textContent = creds.username;
                             document.getElementById('last-pass').textContent = creds.password;
-                            addLog('[client] ✅ SUCCESS!');
+                            document.getElementById('last-status').textContent = creds.status;
+
+                            const badge = document.getElementById('account-status-badge');
+                            badge.style.display = 'inline';
+                            if (creds.status === 'success') {
+                                successes++;
+                                document.getElementById('stat-success').textContent = successes;
+                                badge.className = 'success-badge';
+                                badge.textContent = '✅ ACCOUNT CREATED';
+                                addLog('[client] ✅ SUCCESS - Account created!');
+                            } else {
+                                badge.className = 'waiting-badge';
+                                badge.textContent = '⏳ SUBMITTED (check email)';
+                                addLog('[client] ✅ Flow completed');
+                            }
                             resetButton();
                         } else if (creds.error) {
                             clearInterval(poll);
                             addLog('[client] ❌ ERROR: ' + creds.error);
+                            document.getElementById('last-status').textContent = 'ERROR: ' + creds.error;
                             resetButton();
                         }
                     } catch(e) {}
                     
-                    if (waited > 45) {
+                    if (waited > 60) {
                         clearInterval(poll);
-                        addLog('[client] ⚠️ Timed out (45s)');
+                        addLog('[client] ⚠️ Timed out (60s)');
                         resetButton();
                     }
                 }, 1000);

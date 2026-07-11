@@ -4,7 +4,10 @@ import time
 import random
 import string
 import threading
+import socket
 import requests
+import re
+import json
 from flask import Flask, render_template, Response, jsonify
 
 app = Flask(__name__)
@@ -13,14 +16,118 @@ PORT = int(os.environ.get("PORT", 8080))
 latest_screenshot = b''
 latest_credentials = {}
 status_log = []
+lock = threading.Lock()
 
 def log(msg):
     line = f"[{time.strftime('%H:%M:%S')}] {msg}"
     print(line, file=sys.stderr, flush=True)
-    status_log.append(line)
-    # Keep only last 100 lines
-    if len(status_log) > 100:
-        status_log.pop(0)
+    with lock:
+        status_log.append(line)
+        if len(status_log) > 100:
+            status_log.pop(0)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  MAIL.TM — Disposable email inbox
+# ═══════════════════════════════════════════════════════════════════════════
+
+MAILTM_API = "https://api.mail.tm"
+
+def create_temp_email():
+    """Create a disposable email inbox via mail.tm API."""
+    try:
+        # Generate a random email
+        domain_resp = requests.get(f"{MAILTM_API}/domains", timeout=10)
+        if domain_resp.status_code != 200:
+            log("  ⚠️ Could not fetch mail.tm domains, using mail.tm directly")
+            domain = "@mail.tm"
+        else:
+            domains = domain_resp.json().get("hydra:member", [])
+            domain = domains[0]["domain"] if domains else "@mail.tm"
+
+        local_part = ''.join(random.choices(string.ascii_lowercase, k=12))
+        email = f"{local_part}{domain}"
+        password = "TempPass123!"
+
+        # Create account
+        resp = requests.post(f"{MAILTM_API}/accounts", json={
+            "address": email,
+            "password": password
+        }, timeout=10)
+
+        if resp.status_code == 201:
+            token_resp = requests.post(f"{MAILTM_API}/token", json={
+                "address": email,
+                "password": password
+            }, timeout=10)
+            if token_resp.status_code == 200:
+                token = token_resp.json().get("token", "")
+                account_id = resp.json().get("id", "")
+                log(f"  ✅ Temp email created: {email}")
+                return email, token, account_id, password
+        else:
+            # Fallback to simple mail.tm format
+            log(f"  ⚠️ mail.tm API error: {resp.status_code}, using simple format")
+            return None, None, None, None
+    except Exception as e:
+        log(f"  ⚠️ mail.tm error: {e}")
+        return None, None, None, None
+
+
+def check_mailtm_inbox(token, account_id, timeout=60):
+    """Poll mail.tm inbox for Instagram verification code."""
+    start = time.time()
+    headers = {"Authorization": f"Bearer {token}"}
+    while time.time() - start < timeout:
+        try:
+            resp = requests.get(f"{MAILTM_API}/messages", headers=headers, timeout=10)
+            if resp.status_code == 200:
+                messages = resp.json().get("hydra:member", [])
+                for msg in messages:
+                    from_addr = msg.get("from", {}).get("address", "")
+                    subject = msg.get("subject", "")
+                    log(f"  📧 Mail from: {from_addr} subject: {subject}")
+
+                    # Check if from Instagram
+                    if "instagram" in from_addr.lower() or "instagram" in subject.lower() or "confirm" in subject.lower() or "code" in subject.lower() or "verify" in subject.lower():
+                        # Get full message
+                        msg_id = msg.get("id")
+                        if msg_id:
+                            msg_resp = requests.get(
+                                f"{MAILTM_API}/messages/{msg_id}",
+                                headers=headers, timeout=10
+                            )
+                            if msg_resp.status_code == 200:
+                                body = msg_resp.json().get("text", "") or ""
+                                html_body = msg_resp.json().get("html", "") or []
+
+                                # Extract code from text body
+                                codes = re.findall(r'\b(\d{5,6})\b', body)
+                                if codes:
+                                    log(f"  ✅ Found verification code: {codes[0]}")
+                                    return codes[0]
+
+                                # Extract from HTML
+                                for part in html_body:
+                                    if isinstance(part, str):
+                                        codes = re.findall(r'\b(\d{5,6})\b', part)
+                                        if codes:
+                                            log(f"  ✅ Found verification code in HTML: {codes[0]}")
+                                            return codes[0]
+
+                # Delete processed messages
+                for msg in messages:
+                    try:
+                        mid = msg.get("id")
+                        if mid:
+                            requests.delete(f"{MAILTM_API}/messages/{mid}", headers=headers, timeout=5)
+                    except:
+                        pass
+        except Exception as e:
+            log(f"  ⚠️ Mail check error: {e}")
+
+        time.sleep(5)
+    return None
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -34,7 +141,6 @@ COOKIE_SELECTORS = [
     'div[role="dialog"] button:has-text("Allow all cookies")',
     'div[role="dialog"] button:has-text("Accept All")',
     'div[role="dialog"] button:has-text("Accept")',
-    'div[role="dialog"] button:has-text("Allow essential and optional cookies")',
     'button:has-text("Allow all cookies")',
     'button:has-text("Accept all")',
     'button:has-text("Accept")',
@@ -44,19 +150,14 @@ COOKIE_SELECTORS = [
     'button:has-text("Allow")',
     '[aria-label*="Accept"]',
     '[aria-label*="allow" i]',
-    '[aria-label*="cookie" i]',
     'button[id*="accept"]',
-    'button[id*="cookie"]',
     'button[class*="accept"]',
-    'button[class*="cookie"]',
     'div[role="dialog"] button:last-of-type',
-    'div[role="presentation"] button:last-of-type',
     'div[role="alertdialog"] button:last-of-type',
 ]
 
 
 def accept_cookies(page):
-    """Scan for and click any cookie/consent banner. Non-blocking if none found."""
     try:
         page.wait_for_load_state("domcontentloaded", timeout=8000)
     except:
@@ -74,9 +175,9 @@ def accept_cookies(page):
         except:
             continue
 
-    for text in ["Allow all cookies", "Accept All", "Accept", "Allow"]:
+    for text in ["Allow all cookies", "Accept All", "Accept", "Allow", "I accept"]:
         try:
-            btn = page.get_by_role("button", name=text)
+            btn = page.get_by_role("button", name=text, exact=False)
             if btn.count() > 0 and btn.first.is_visible():
                 btn.first.click(timeout=3000)
                 log(f"  🍪 Cookie accepted via role: {text}")
@@ -84,7 +185,6 @@ def accept_cookies(page):
                 return True
         except:
             continue
-
     return False
 
 
@@ -132,45 +232,66 @@ def setup_ad_block(page):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  FORM HELPERS — multi-strategy fill / click / select
+#  FORM HELPERS
 # ═══════════════════════════════════════════════════════════════════════════
 
+def human_delay():
+    time.sleep(random.uniform(0.5, 1.5))
+
+
 def fill_field(page, selectors, value, label="field"):
-    """Try a list of selectors to fill a text input."""
     for sel in selectors:
         try:
             loc = page.locator(sel)
             if loc.count() > 0 and loc.first.is_visible():
                 loc.first.click(timeout=3000)
                 loc.first.fill('', timeout=3000)
+                time.sleep(0.2)
                 loc.first.type(value, delay=random.randint(30, 90))
-                log(f"  ✅ {label} = {value}  ({sel})")
+                log(f"  ✅ {label} = {value}")
                 return True
         except:
             continue
+    # Fallback: find matching input by aria/placeholder/name
+    try:
+        inputs = page.locator('input:visible')
+        count = inputs.count()
+        for i in range(count):
+            try:
+                aria = inputs.nth(i).get_attribute('aria-label') or ''
+                placeholder = inputs.nth(i).get_attribute('placeholder') or ''
+                name = inputs.nth(i).get_attribute('name') or ''
+                if label.lower() in (aria + placeholder + name).lower():
+                    inputs.nth(i).click(timeout=2000)
+                    inputs.nth(i).fill('', timeout=2000)
+                    inputs.nth(i).type(value, delay=random.randint(30, 90))
+                    log(f"  ✅ {label} = {value} (fallback)")
+                    return True
+            except:
+                continue
+    except:
+        pass
     log(f"  ❌ Could not find {label}!")
     return False
 
 
 def click_button(page, selectors, label="button"):
-    """Try a list of selectors to click a button."""
     for sel in selectors:
         try:
             btn = page.locator(sel)
             if btn.count() > 0 and btn.first.is_visible():
                 btn.first.click(timeout=5000)
-                log(f"  👆 Clicked {label}  ({sel})")
+                log(f"  👆 Clicked {label}")
                 time.sleep(0.5)
                 return True
         except:
             continue
-    # Last resort: try by role
-    for name in ["Next", "Sign up", "Sign Up", "Continue", "Submit"]:
+    for name in ["Next", "Sign up", "Sign Up", "Continue", "Submit", "Create account", "Done"]:
         try:
-            btn = page.get_by_role("button", name=name)
+            btn = page.get_by_role("button", name=name, exact=False)
             if btn.count() > 0 and btn.first.is_visible():
                 btn.first.click(timeout=5000)
-                log(f"  👆 Clicked {label} via role={name}")
+                log(f"  👆 Clicked {label} via role='{name}'")
                 time.sleep(0.5)
                 return True
         except:
@@ -179,195 +300,92 @@ def click_button(page, selectors, label="button"):
     return False
 
 
+def click_first_visible_button(page, label="button"):
+    try:
+        btn = page.locator('button:visible').first
+        if btn.count() > 0:
+            btn.first.click(timeout=5000)
+            log(f"  👆 Clicked {label} (first visible button)")
+            time.sleep(0.5)
+            return True
+    except:
+        pass
+    return False
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  DATE OF BIRTH
+# ═══════════════════════════════════════════════════════════════════════════
+
 def select_dob(page):
-    """
-    Fill Instagram's date-of-birth step.
-    Handles <select> dropdowns, text inputs, and hybrid UIs.
-    """
     year = random.randint(1991, 2008)
     month = random.randint(1, 12)
     day = random.randint(1, 28 if month == 2 else 30)
-
-    month_name = [
-        '', 'January','February','March','April','May','June',
-        'July','August','September','October','November','December'
-    ][month]
-    month_abbr = month_name[:3]
+    month_name = ['', 'January','February','March','April','May','June',
+                  'July','August','September','October','November','December'][month]
 
     log(f"  🎂 DOB: {month_name} {day}, {year}")
-
-    # Let the DOB step render
     time.sleep(1.5)
-    global latest_screenshot
-    latest_screenshot = page.screenshot(type='jpeg', quality=70)
+    with lock:
+        latest_screenshot = page.screenshot(type='jpeg', quality=70)
 
-    # ── STRATEGY 1: <select> dropdowns by DOM order ──
+    # Strategy 1: <select> dropdowns
     try:
         selects = page.locator('select')
         count = selects.count()
         if count >= 3:
             selects.nth(0).select_option(str(month), timeout=3000)
-            log(f"  ✅ Month select = {month}")
-            time.sleep(0.4)
+            time.sleep(0.3)
             selects.nth(1).select_option(str(day), timeout=3000)
-            log(f"  ✅ Day select = {day}")
-            time.sleep(0.4)
+            time.sleep(0.3)
             selects.nth(2).select_option(str(year), timeout=3000)
-            log(f"  ✅ Year select = {year}")
+            log(f"  ✅ DOB via select: {month}/{day}/{year}")
             return True
-        elif count > 0:
-            log(f"  ⚠️ Only {count} native select(s) on DOB page — using fallback...")
-            vals = [str(month), str(day), str(year)]
-            for i in range(min(count, 3)):
-                try:
-                    selects.nth(i).select_option(vals[i], timeout=3000)
-                    log(f"  ✅ Select[{i}] = {vals[i]}")
-                except:
-                    pass
-    except Exception as e:
-        log(f"  ⚠️ Select strategy: {e}")
+    except:
+        pass
 
-    # ── STRATEGY 2: Select by aria-label / name ──
-    def try_select(selectors_list, value):
-        for s in selectors_list:
+    # Strategy 2: By aria-label
+    for label, val in [("month", str(month)), ("day", str(day)), ("year", str(year))]:
+        for sel in [f'select[aria-label*="{label}" i]', f'select[title*="{label}" i]',
+                    f'select[name*="{label}" i]', f'select[id*="{label}" i]']:
             try:
-                el = page.locator(s)
+                el = page.locator(sel)
                 if el.count() > 0 and el.first.is_visible():
-                    el.first.select_option(str(value), timeout=3000)
-                    return True
+                    el.first.select_option(val, timeout=3000)
+                    break
             except:
                 continue
-        return False
 
-    m_ok = try_select([
-        'select[aria-label*="month" i]', 'select[aria-label*="Month"]',
-        'select[title*="month" i]', 'select[name*="month" i]',
-        'select[id*="month" i]',
-    ], month)
-    time.sleep(0.2)
-    d_ok = try_select([
-        'select[aria-label*="day" i]', 'select[aria-label*="Day"]',
-        'select[title*="day" i]', 'select[name*="day" i]',
-        'select[id*="day" i]',
-    ], day)
-    time.sleep(0.2)
-    y_ok = try_select([
-        'select[aria-label*="year" i]', 'select[aria-label*="Year"]',
-        'select[title*="year" i]', 'select[name*="year" i]',
-        'select[id*="year" i]',
-    ], year)
-
-    if m_ok or d_ok or y_ok:
-        log(f"  ✅ DOB (aria-label selects): m={m_ok} d={d_ok} y={y_ok}")
-
-    # ── STRATEGY 3: Text/number inputs (Instagram sometimes uses these) ──
-    # Try each possible input type in priority order
-
-    # Month input
-    month_input_selectors = [
-        'input[aria-label*="month" i]', 'input[aria-label*="Month"]',
-        'input[name*="month" i]', 'input[id*="month" i]',
-        'input[placeholder*="month" i]', 'input[placeholder*="MM"]',
-    ]
-    m_input_ok = False
-    for txt in [str(month), month_name, month_abbr]:
-        for sel in month_input_selectors:
+    # Strategy 3: Text inputs
+    for label, val in [("month", str(month)), ("day", str(day)), ("year", str(year))]:
+        for sel in [f'input[aria-label*="{label}" i]', f'input[placeholder*="{label}" i]',
+                    f'input[name*="{label}" i]', f'input[id*="{label}" i]']:
             try:
                 loc = page.locator(sel)
                 if loc.count() > 0 and loc.first.is_visible():
                     loc.first.click(timeout=2000)
                     loc.first.fill('', timeout=2000)
-                    loc.first.type(txt, delay=random.randint(30, 70))
-                    log(f"  ✅ Month text input = {txt}")
-                    m_input_ok = True
+                    loc.first.type(val, delay=random.randint(30, 70))
                     break
             except:
                 continue
-        if m_input_ok:
-            break
+        time.sleep(0.2)
 
-    time.sleep(0.3)
-
-    # Day input
-    day_input_selectors = [
-        'input[aria-label*="day" i]', 'input[aria-label*="Day"]',
-        'input[name*="day" i]', 'input[id*="day" i]',
-        'input[placeholder*="day" i]', 'input[placeholder*="DD"]',
-    ]
-    for sel in day_input_selectors:
-        try:
-            loc = page.locator(sel)
-            if loc.count() > 0 and loc.first.is_visible():
-                loc.first.click(timeout=2000)
-                loc.first.fill('', timeout=2000)
-                loc.first.type(str(day), delay=random.randint(30, 70))
-                log(f"  ✅ Day text input = {day}")
-                break
-        except:
-            continue
-
-    time.sleep(0.3)
-
-    # Year input
-    year_input_selectors = [
-        'input[aria-label*="year" i]', 'input[aria-label*="Year"]',
-        'input[name*="year" i]', 'input[id*="year" i]',
-        'input[placeholder*="year" i]', 'input[placeholder*="YYYY"]',
-    ]
-    for sel in year_input_selectors:
-        try:
-            loc = page.locator(sel)
-            if loc.count() > 0 and loc.first.is_visible():
-                loc.first.click(timeout=2000)
-                loc.first.fill('', timeout=2000)
-                loc.first.type(str(year), delay=random.randint(30, 70))
-                log(f"  ✅ Year text input = {year}")
-                break
-        except:
-            continue
-
-    log(f"  ⚠️ DOB native elements not found. Trying all-visible-inputs fallback...")
-    
-    # Last resort: fill every visible text/num/search input with DOB values
+    # Strategy 4: Fill first 3 visible inputs
     try:
-        text_inputs = page.locator(
-            'input[type="text"]:visible, '
-            'input:not([type]):visible, '
-            'input[type="number"]:visible, '
-            'input[type="search"]:visible'
-        )
+        text_inputs = page.locator('input[type="text"]:visible, input:not([type]):visible, input[type="number"]:visible')
         count_ti = text_inputs.count()
-        log(f"  🔍 All-visible text/num/search inputs: {count_ti}")
-        dob_vals = [str(month), str(day), str(year)]
-        for i in range(min(count_ti, 3)):
-            try:
-                inp = text_inputs.nth(i)
-                inp.click(timeout=2000)
-                inp.fill('', timeout=2000)
-                inp.type(dob_vals[i], delay=random.randint(30, 70))
-                log(f"  ✅ Generic input[{i}] = {dob_vals[i]}")
-            except Exception as e:
-                log(f"  ⚠️ Generic input[{i}]: {e}")
-    except Exception as e:
-        log(f"  ⚠️ Generic fallback failed: {e}")
+        if count_ti >= 3:
+            dob_vals = [str(month), str(day), str(year)]
+            for i in range(3):
+                text_inputs.nth(i).click(timeout=2000)
+                text_inputs.nth(i).fill('', timeout=2000)
+                text_inputs.nth(i).type(dob_vals[i], delay=random.randint(30, 70))
+            log(f"  ✅ DOB via generic inputs: {month}/{day}/{year}")
+    except:
+        pass
 
-    return False
-
-
-def wait_for_next_step(page, previous_url, timeout=15):
-    """Wait for the page URL to change (multi-step form navigation)."""
-    start = time.time()
-    while time.time() - start < timeout:
-        try:
-            cur = page.url
-            if cur != previous_url and 'accounts' in cur:
-                log(f"  🔄 Advanced to: {cur[:80]}")
-                return True
-        except:
-            pass
-        time.sleep(0.5)
-    # Also check if page content changed significantly
-    return True  # don't block — might be same URL with different UI
+    return True
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -381,9 +399,8 @@ def run_signup():
 
         p = sync_playwright().start()
 
+        # Check Tor
         proxy_config = None
-        # Only use Tor if socks port is open
-        import socket
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.settimeout(1)
         tor_available = s.connect_ex(('127.0.0.1', 9050)) == 0
@@ -392,7 +409,7 @@ def run_signup():
             proxy_config = {"server": "socks5://127.0.0.1:9050"}
             log("🌐 Using Tor SOCKS5 proxy")
         else:
-            log("⚠️  Tor not available — running without proxy")
+            log("⚠️ Tor not available — running without proxy")
 
         browser = p.chromium.launch(
             proxy=proxy_config,
@@ -423,39 +440,49 @@ def run_signup():
         apply_stealth(page)
         setup_ad_block(page)
 
+        # ── Create temp email inbox ──
+        log("📧 Creating temp email...")
+        email, mail_token, account_id, mail_password = create_temp_email()
+        if not email:
+            # Fallback to simple format
+            email = f"{''.join(random.choices(string.ascii_lowercase, k=12))}@mail.tm"
+            log(f"  Using simple email: {email}")
+
         # ── Generate credentials ──
-        email = f"{''.join(random.choices(string.ascii_lowercase, k=12))}@mail.tm"
-        full_name = f"{random.choice(['Alex','Jordan','Casey','Riley','Morgan','Taylor'])} {random.choice(['Smith','Jones','Brown','Davis','Lee','Cruz'])}"
+        first_names = ['Alex','Jordan','Casey','Riley','Morgan','Taylor','Jamie','Avery','Quinn','Skyler','Drew','Reese']
+        last_names = ['Smith','Jones','Brown','Davis','Lee','Cruz','Wang','Kim','Patel','Garcia','Miller','Wilson']
+        full_name = f"{random.choice(first_names)} {random.choice(last_names)}"
         username = f"{full_name.replace(' ','').lower()}{random.randint(10, 9999)}"
         password = ''.join(random.choices(string.ascii_letters + string.digits + '!@#$', k=14))
 
         log(f"📋 Generated: name={full_name}  user={username}  email={email}")
 
         # ═══════════════════════════════════════════════════
-        #  STEP 1: Load page → Accept cookies → Detect fields
+        #  STEP 1: Load Instagram signup page
         # ═══════════════════════════════════════════════════
-        log("── Step 1: Load & Detect ──")
+        log("── Step 1: Load Instagram signup ──")
         page.goto('https://www.instagram.com/accounts/emailsignup/',
                   timeout=30000, wait_until='domcontentloaded')
         accept_cookies(page)
-
         try:
             page.wait_for_load_state('networkidle', timeout=12000)
         except:
             pass
         accept_cookies(page)
-        time.sleep(1.5)
-        latest_screenshot = page.screenshot(type='jpeg', quality=70)
+        time.sleep(2)
 
-        # Detect what fields are visible on this page
+        with lock:
+            latest_screenshot = page.screenshot(type='jpeg', quality=70)
+
+        # Detect what fields are visible
         has_email = False
         has_name = False
-        for sel in ['input[name="emailOrPhone"]', 'input[type="email"]']:
+        for sel in ['input[name="emailOrPhone"]', 'input[type="email"]', 'input[aria-label*="email" i]', 'input[aria-label*="Mobile" i]', 'input[aria-label*="Phone" i]']:
             try:
                 if page.locator(sel).count() > 0 and page.locator(sel).first.is_visible():
                     has_email = True; break
             except: pass
-        for sel in ['input[name="fullName"]', 'input[aria-label*="name" i]']:
+        for sel in ['input[name="fullName"]', 'input[aria-label*="name" i]', 'input[aria-label*="Full Name" i]']:
             try:
                 if page.locator(sel).count() > 0 and page.locator(sel).first.is_visible():
                     has_name = True; break
@@ -464,132 +491,198 @@ def run_signup():
         log(f"  🔍 Detected: email={has_email}  name={has_name}")
 
         if not has_email and not has_name:
-            # Fallback: try the first visible input and first visible button
-            log("  ⚠️ No known fields detected! Trying generic fallback...")
+            log("  ⚠️ No known fields! Trying first visible input...")
             try:
                 first_input = page.locator('input:visible').first
-                if first_input:
+                if first_input.count() > 0:
                     first_input.click(timeout=3000)
-                    first_input.fill(email, timeout=3000)
-                    log(f"  ✅ Fallback: filled first input with email")
+                    first_input.fill('', timeout=3000)
+                    first_input.type(email, delay=random.randint(30, 90))
+                    log(f"  ✅ Filled first input with email")
                     has_email = True
             except: pass
             try:
-                first_btn = page.locator('button:visible').first
-                if first_btn:
-                    first_btn.click(timeout=3000)
-                    log(f"  👆 Fallback: clicked first button")
+                btn = page.locator('button:visible').first
+                if btn.count() > 0:
+                    btn.click(timeout=3000)
+                    log(f"  👆 Clicked first button")
             except: pass
             time.sleep(2)
-            accept_cookies(page)
 
         if has_email:
             fill_field(page, [
-                'input[name="emailOrPhone"]',
-                'input[type="email"]',
-                'input[aria-label*="email" i]',
+                'input[name="emailOrPhone"]', 'input[type="email"]',
+                'input[aria-label*="email" i]', 'input[aria-label*="Mobile" i]',
+                'input[aria-label*="Phone" i]', 'input[placeholder*="email" i]',
+                'input[placeholder*="phone" i]',
             ], email, 'email')
             human_delay()
-            click_button(page, [
-                'button[type="submit"]',
-                'button:has-text("Next")',
-            ], 'Next (email)')
+            click_button(page, ['button[type="submit"]', 'button:has-text("Next")',
+                                'button:has-text("Sign up")', 'button:has-text("Continue")'],
+                        'Next (email)')
             time.sleep(3)
-            accept_cookies(page)
 
         if has_name:
-            fill_field(page, [
-                'input[name="fullName"]',
-                'input[aria-label*="name" i]',
-            ], full_name, 'full name')
+            fill_field(page, ['input[name="fullName"]', 'input[aria-label*="name" i]',
+                              'input[aria-label*="Full Name" i]', 'input[placeholder*="name" i]'],
+                      full_name, 'full name')
             human_delay()
-            click_button(page, [
-                'button[type="submit"]',
-                'button:has-text("Next")',
-            ], 'Next (name)')
+            click_button(page, ['button[type="submit"]', 'button:has-text("Next")',
+                                'button:has-text("Continue")'],
+                        'Next (name)')
             time.sleep(3)
-            accept_cookies(page)
 
-        latest_screenshot = page.screenshot(type='jpeg', quality=70)
+        accept_cookies(page)
+        with lock:
+            latest_screenshot = page.screenshot(type='jpeg', quality=70)
 
         # ═══════════════════════════════════════════════════
-        #  STEP 2: Username → Next  (if not already filled)
+        #  STEP 2: Username
         # ═══════════════════════════════════════════════════
         log("── Step 2: Username ──")
-        fill_field(page, [
-            'input[name="username"]',
-            'input[aria-label="Username"]',
-            'input[aria-label*="username" i]',
-        ], username, 'username')
-
+        fill_field(page, ['input[name="username"]', 'input[aria-label="Username"]',
+                          'input[aria-label*="username" i]', 'input[placeholder*="username" i]'],
+                  username, 'username')
         human_delay()
-        click_button(page, [
-            'button[type="submit"]',
-            'button:has-text("Next")',
-            'button:has-text("Continue")',
-        ], 'Next (step 2)')
-
+        click_button(page, ['button[type="submit"]', 'button:has-text("Next")',
+                            'button:has-text("Continue")', 'button:has-text("Sign up")'],
+                    'Next (username)')
         time.sleep(3)
         accept_cookies(page)
-        latest_screenshot = page.screenshot(type='jpeg', quality=70)
+        with lock:
+            latest_screenshot = page.screenshot(type='jpeg', quality=70)
 
         # ═══════════════════════════════════════════════════
-        #  STEP 3: Date of Birth → Next (BEFORE password!)
+        #  STEP 3: Password
         # ═══════════════════════════════════════════════════
-        log("── Step 3: Date of Birth ──")
-        select_dob(page)
-
+        log("── Step 3: Password ──")
+        fill_field(page, ['input[name="password"]', 'input[aria-label="Password"]',
+                          'input[aria-label*="password" i]', 'input[type="password"]',
+                          'input[placeholder*="password" i]'],
+                  password, 'password')
         human_delay()
-        click_button(page, [
-            'button[type="submit"]',
-            'button:has-text("Next")',
-            'button:has-text("Continue")',
-        ], 'Next (step 3 - DOB)')
-
-        time.sleep(3)
-        accept_cookies(page)
-        latest_screenshot = page.screenshot(type='jpeg', quality=70)
-
-        # ═══════════════════════════════════════════════════
-        #  STEP 4: Password → Next
-        # ═══════════════════════════════════════════════════
-        log("── Step 4: Password ──")
-        fill_field(page, [
-            'input[name="password"]',
-            'input[aria-label="Password"]',
-            'input[aria-label*="password" i]',
-            'input[type="password"]',
-        ], password, 'password')
-
-        human_delay()
-        click_button(page, [
-            'button[type="submit"]',
-            'button:has-text("Next")',
-            'button:has-text("Continue")',
-            'button:has-text("Sign up")',
-            'button:has-text("Sign Up")',
-        ], 'Next (step 4)')
-
+        click_button(page, ['button[type="submit"]', 'button:has-text("Next")',
+                            'button:has-text("Continue")', 'button:has-text("Sign up")',
+                            'button:has-text("Sign Up")', 'button:has-text("Create account")'],
+                    'Next (password)')
         time.sleep(4)
         accept_cookies(page)
-        latest_screenshot = page.screenshot(type='jpeg', quality=70)
+        with lock:
+            latest_screenshot = page.screenshot(type='jpeg', quality=70)
 
         # ═══════════════════════════════════════════════════
-        #  STEP 6: Possible confirmation / email code screen
+        #  STEP 4: Date of Birth (if shown)
         # ═══════════════════════════════════════════════════
-        # Wait a moment and take final screenshot
-        time.sleep(2)
-        latest_screenshot = page.screenshot(type='jpeg', quality=70)
+        log("── Step 4: Date of Birth ──")
+        # Check if DOB is on the page
+        has_dob = False
+        for sel in ['select:visible', 'input[aria-label*="month" i]', 'input[aria-label*="birth" i]',
+                    'input[aria-label*="date" i]', 'input[placeholder*="birth" i]']:
+            try:
+                if page.locator(sel).count() > 0:
+                    has_dob = True; break
+            except: pass
 
-        latest_credentials = {
-            'email': email,
-            'username': username,
-            'password': password,
-            'full_name': full_name,
-        }
-        log(f"🏁 FINISHED: {username} / {email}")
+        if has_dob:
+            select_dob(page)
+            human_delay()
+            click_button(page, ['button[type="submit"]', 'button:has-text("Next")',
+                                'button:has-text("Continue")', 'button:has-text("Sign up")'],
+                        'Next (DOB)')
+            time.sleep(3)
+            accept_cookies(page)
+        else:
+            log("  ⏭️ No DOB fields detected, skipping")
 
-        # Rotate Tor if available
+        with lock:
+            latest_screenshot = page.screenshot(type='jpeg', quality=70)
+
+        # ═══════════════════════════════════════════════════
+        #  STEP 5: Email verification code
+        # ═══════════════════════════════════════════════════
+        log("── Step 5: Email Verification ──")
+
+        # Check if we're on a verification page
+        on_verify = False
+        cur_url = page.url
+        if "confirm" in cur_url or "challenge" in cur_url or "verify" in cur_url:
+            on_verify = True
+            log("  🔍 Verification page detected!")
+        else:
+            # Check for "enter confirmation code" text
+            try:
+                body_text = page.locator('body').inner_text()
+                if 'code' in body_text.lower() and ('email' in body_text.lower() or 'confirm' in body_text.lower()):
+                    on_verify = True
+                    log("  🔍 Verification prompt detected!")
+            except:
+                pass
+
+        verification_code = None
+        if on_verify and mail_token:
+            log("  📧 Waiting for Instagram verification email...")
+            verification_code = check_mailtm_inbox(mail_token, account_id, timeout=45)
+
+        if verification_code:
+            log(f"  🔑 Entering verification code: {verification_code}")
+            # Try to find the verification code input
+            fill_field(page, [
+                'input[inputmode="numeric"]', 'input[type="tel"]', 'input[type="text"]',
+                'input[aria-label*="code" i]', 'input[aria-label*="confirm" i]',
+                'input[placeholder*="code" i]', 'input[name*="code" i]',
+            ], verification_code, 'verification code')
+
+            human_delay()
+            click_button(page, ['button[type="submit"]', 'button:has-text("Next")',
+                                'button:has-text("Confirm")', 'button:has-text("Verify")',
+                                'button:has-text("Done")', 'button:has-text("Submit")'],
+                        'Verify code')
+            time.sleep(4)
+        elif on_verify:
+            log("  ⚠️ No verification code received")
+        else:
+            log("  ⏭️ No verification page detected")
+
+        # ═══════════════════════════════════════════════════
+        #  FINAL: Check result
+        # ═══════════════════════════════════════════════════
+        time.sleep(3)
+        with lock:
+            latest_screenshot = page.screenshot(type='jpeg', quality=70)
+
+        current_url = page.url
+        log(f"📄 Final URL: {current_url[:120]}")
+
+        # Check for success indicators
+        is_success = False
+        try:
+            body_text = page.locator('body').inner_text()
+            if "welcome" in body_text.lower() or "let's go" in body_text.lower() or "start exploring" in body_text.lower() or "logged in" in body_text.lower():
+                is_success = True
+                log("✅ SUCCESS - Account created!")
+        except:
+            pass
+
+        if "accounts/emailsignup" in current_url or "signup" in current_url:
+            log("⚠️ Still on signup page - account may not have been created")
+        else:
+            is_success = True
+            log("✅ Navigated away from signup page - likely success!")
+
+        with lock:
+            latest_credentials = {
+                'email': email,
+                'username': username,
+                'password': password,
+                'full_name': full_name,
+                'status': 'success' if is_success else 'completed',
+                'verification_code': verification_code or '',
+                'final_url': current_url[:120],
+            }
+
+        log(f"🏁 Done: {username} / {email} | success={is_success}")
+
+        # Rotate Tor
         if tor_available:
             try:
                 requests.post('http://127.0.0.1:9051', data='SIGNAL NEWNYM', timeout=2)
@@ -601,7 +694,10 @@ def run_signup():
 
     except Exception as e:
         log(f"💥 CRASH: {e}")
-        latest_credentials = {'error': str(e)}
+        import traceback
+        log(f"💥 {traceback.format_exc()[-300:]}")
+        with lock:
+            latest_credentials = {'error': str(e)}
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -617,10 +713,11 @@ def index():
 def stream():
     def gen():
         while True:
-            if latest_screenshot:
-                yield (b'--frame\r\n'
-                       b'Content-Type: image/jpeg\r\n\r\n'
-                       + latest_screenshot + b'\r\n')
+            with lock:
+                if latest_screenshot:
+                    yield (b'--frame\r\n'
+                           b'Content-Type: image/jpeg\r\n\r\n'
+                           + latest_screenshot + b'\r\n')
             time.sleep(1)
     return Response(gen(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
@@ -632,25 +729,22 @@ def status():
 
 @app.route('/create', methods=['POST'])
 def create():
-    status_log.clear()
+    with lock:
+        status_log.clear()
     threading.Thread(target=run_signup, daemon=True).start()
     return jsonify({'status': 'started'})
 
 
 @app.route('/credentials')
 def creds():
-    return jsonify(latest_credentials)
+    with lock:
+        return jsonify(latest_credentials)
 
 
 @app.route('/logs')
 def logs():
-    return jsonify(status_log[-50:])
-
-
-# ── Helpers ──
-
-def human_delay():
-    time.sleep(random.uniform(0.3, 1.0))
+    with lock:
+        return jsonify(status_log[-50:])
 
 
 if __name__ == '__main__':
