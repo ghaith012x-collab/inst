@@ -201,38 +201,10 @@ def select_dob(page):
     global latest_screenshot
     latest_screenshot = page.screenshot(type='jpeg', quality=70)
 
-    # Deep debug: log all inputs and selects on the page
-    try:
-        all_selects = page.locator('select')
-        count_s = all_selects.count()
-        log(f"  🔍 Found {count_s} <select> elements")
-        for i in range(min(count_s, 5)):
-            try:
-                opts = all_selects.nth(i).locator('option').count()
-                name = all_selects.nth(i).get_attribute('name') or ''
-                aria = all_selects.nth(i).get_attribute('aria-label') or ''
-                log(f"    select[{i}]: name='{name}' aria='{aria}' options={opts}")
-            except: pass
-
-        all_inputs = page.locator('input:visible')
-        count_i = all_inputs.count()
-        log(f"  🔍 Found {count_i} visible <input> elements")
-        for i in range(min(count_i, 6)):
-            try:
-                tp = all_inputs.nth(i).get_attribute('type') or 'text'
-                name = all_inputs.nth(i).get_attribute('name') or ''
-                aria = all_inputs.nth(i).get_attribute('aria-label') or ''
-                placeholder = all_inputs.nth(i).get_attribute('placeholder') or ''
-                log(f"    input[{i}]: type='{tp}' name='{name}' aria='{aria}' placeholder='{placeholder}'")
-            except: pass
-    except Exception as e:
-        log(f"  ⚠️ Debug error: {e}")
-
     # ── STRATEGY 1: <select> dropdowns by DOM order ──
     try:
         selects = page.locator('select')
         count = selects.count()
-        log(f"  🔍 Found {count} <select> elements on DOB page")
         if count >= 3:
             selects.nth(0).select_option(str(month), timeout=3000)
             log(f"  ✅ Month select = {month}")
@@ -244,7 +216,7 @@ def select_dob(page):
             log(f"  ✅ Year select = {year}")
             return True
         elif count > 0:
-            log(f"  ⚠️ Only {count} select(s), doing best-effort...")
+            log(f"  ⚠️ Only {count} native select(s) on DOB page — using fallback...")
             vals = [str(month), str(day), str(year)]
             for i in range(min(count, 3)):
                 try:
@@ -489,15 +461,6 @@ def run_signup():
                     has_name = True; break
             except: pass
 
-        # Debug: log page info
-        try:
-            log(f"  📄 Page title: {page.title()[:80]}")
-            log(f"  📄 Page URL: {page.url[:100]}")
-            # Count total inputs
-            all_inputs = page.locator('input').count()
-            all_buttons = page.locator('button').count()
-            log(f"  📄 Inputs: {all_inputs}  Buttons: {all_buttons}")
-        except: pass
         log(f"  🔍 Detected: email={has_email}  name={has_name}")
 
         if not has_email and not has_name:
