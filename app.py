@@ -21,55 +21,59 @@ def ss(page):
         try: latest_screenshot = page.screenshot(type='jpeg', quality=70)
         except: pass
 
-def get_email(page):
-    page.goto('https://hi2.in/', timeout=30000, wait_until='domcontentloaded')
-    try: page.wait_for_load_state('networkidle', timeout=15000)
-    except: pass
-    time.sleep(4)
-    ss(page)
-    page.evaluate("""() => {
-        const all = document.querySelectorAll('button, div, span, a');
-        for (const el of all) {
-            if (el.textContent.trim().toLowerCase() === 'generate' && el.offsetParent !== null) {
-                el.click(); return;
-            }
-        }
-    }""")
-    log("Clicked Generate")
-    time.sleep(5)
-    ss(page)
-    for i in range(15):
-        email = page.evaluate("""() => {
-            const t = document.body.innerText;
-            const m = t.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
-            if (m && m[0].length > 6 && m[0].includes('@') && !m[0].includes('random@') && !m[0].includes('{{')) return m[0];
-            return '';
-        }""")
-        if email and '@' in email and len(email) > 8 and 'random@' not in email:
-            log(f"Got: {email}")
-            return email
-        log(f"Wait... ({i+1}/15)")
-        time.sleep(1)
-    return None
+# mail.tm API for temp email
+MAILTM = "https://api.mail.tm"
 
-def check_inbox(page):
-    """Check hi2.in for verification code emails."""
-    page.goto('https://hi2.in/', timeout=30000, wait_until='domcontentloaded')
-    time.sleep(3)
-    page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)")
-    time.sleep(2)
-    ss(page)
-    for a in range(15):
-        txt = page.evaluate("() => document.body.innerText")
-        codes = re.findall(r'\b(\d{5,6})\b', txt)
-        if codes:
-            return codes[0]
-        log(f"Check ({a+1}/15)")
-        page.reload(timeout=30000, wait_until='domcontentloaded')
-        time.sleep(3)
-        page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)")
-        time.sleep(2)
-        ss(page)
+def create_temp_inbox():
+    """Create a temp email inbox via mail.tm API."""
+    try:
+        r = requests.get(f"{MAILTM}/domains", timeout=10)
+        if r.status_code != 200: return None, None, None
+        doms = r.json().get("hydra:member", [])
+        if not doms: return None, None, None
+        dom = doms[0]["domain"]
+        local = ''.join(random.choices(string.ascii_lowercase, k=10))
+        email = f"{local}@{dom}"
+        pwd = "Temp321!"
+        r = requests.post(f"{MAILTM}/accounts", json={"address": email, "password": pwd}, timeout=10)
+        if r.status_code == 201:
+            r2 = requests.post(f"{MAILTM}/token", json={"address": email, "password": pwd}, timeout=10)
+            if r2.status_code == 200:
+                tok = r2.json().get("token", "")
+                log(f"Temp: {email}")
+                return email, tok, pwd
+    except Exception as e:
+        log(f"Mail error: {e}")
+    return None, None, None
+
+def check_mail(token, timeout=60):
+    """Check mail.tm inbox for verification code."""
+    start = time.time()
+    hdrs = {"Authorization": f"Bearer {token}"}
+    while time.time() - start < timeout:
+        try:
+            r = requests.get(f"{MAILTM}/messages", headers=hdrs, timeout=10)
+            if r.status_code == 200:
+                msgs = r.json().get("hydra:member", [])
+                for msg in msgs:
+                    frm = msg.get("from", {}).get("address", "")
+                    subj = msg.get("subject", "")
+                    log(f"Mail: {frm} | {subj}")
+                    mid = msg.get("id")
+                    if mid:
+                        m = requests.get(f"{MAILTM}/messages/{mid}", headers=hdrs, timeout=10)
+                        if m.status_code == 200:
+                            data = m.json()
+                            txt = data.get("text", "") or ""
+                            codes = re.findall(r'\b(\d{5,6})\b', txt)
+                            if codes: return codes[0]
+                            html = data.get("html", []) or []
+                            for p in html if isinstance(html, list) else [html]:
+                                if isinstance(p, str):
+                                    codes = re.findall(r'\b(\d{5,6})\b', p)
+                                    if codes: return codes[0]
+        except: pass
+        time.sleep(5)
     return None
 
 def run_signup():
@@ -99,8 +103,8 @@ def run_signup():
         window.chrome = {runtime: {}};
         try { delete navigator.__proto__.webdriver; } catch(e) {}""")
 
-        # 1. GET EMAIL FROM hi2.in
-        email = get_email(page)
+        # 1. CREATE TEMP EMAIL
+        email, mail_token, _ = create_temp_inbox()
         if not email:
             email = f"{''.join(random.choices(string.ascii_lowercase, k=12))}@gmail.com"
             log(f"Gmail: {email}")
@@ -169,7 +173,7 @@ def run_signup():
                 time.sleep(0.2); page.keyboard.press('Enter'); time.sleep(0.3)
         ss(page)
 
-        # 4. SUBMIT VIA API (bypasses captcha)
+        # 4. SUBMIT VIA API
         log("Submitting via API...")
         t = int(time.time())
         ep = f"#PWD_INSTAGRAM_BROWSER:0:{t}:{pwd}"
@@ -195,20 +199,15 @@ def run_signup():
         account_created = '"account_created":true' in body_str
         needs_code = 'force_sign_up_code' in body_str
 
-        # 5. CHECK FOR VERIFICATION CODE
+        # 5. GET VERIFICATION CODE FROM EMAIL
         code = None
-        if needs_code:
-            log("Email verification required! Checking hi2.in...")
-            code = check_inbox(page)
+        if needs_code and mail_token:
+            log("Waiting for verification email...")
+            code = check_mail(mail_token, timeout=60)
 
-        # 6. SUBMIT VERIFICATION CODE
+        # 6. SUBMIT CODE
         if code:
-            log(f"Got code: {code}")
-            page.goto('https://www.instagram.com/accounts/emailsignup/', timeout=30000, wait_until='domcontentloaded')
-            time.sleep(3)
-            ss(page)
-            csrf2 = page.evaluate("() => (document.cookie.match(/csrftoken=([^;]+)/)||[])[1] || ''")
-
+            log(f"Code: {code}")
             cr = page.evaluate("""(args) => {
                 const [c, code] = args;
                 const fd = new URLSearchParams();
@@ -218,15 +217,14 @@ def run_signup():
                     headers:{'X-CSRFToken':c, 'X-Instagram-AJAX':'1', 'Content-Type':'application/x-www-form-urlencoded'},
                     body:fd,
                 }).then(r => r.text().then(t => ({status:r.status, body:t})));
-            }""", [csrf2, code])
-            log(f"Code API: {cr['status']} - {str(cr['body'])[:200]}")
+            }""", [csrf, code])
+            log(f"Code result: {cr['status']} - {str(cr['body'])[:200]}")
             if '"account_created":true' in str(cr['body']):
                 account_created = True
                 log("ACCOUNT CREATED!")
             time.sleep(5)
-            ss(page)
 
-        # 7. USERNAME RETRY IF NEEDED
+        # 7. USERNAME RETRY
         if not account_created:
             for r in range(5):
                 try:
@@ -265,9 +263,9 @@ def run_signup():
                 log(f"Retry: {result['status']} - {str(result['body'])[:200]}")
                 if '"account_created":true' in str(result['body']):
                     account_created = True
-                    log("ACCOUNT CREATED ON RETRY!")
-                    if needs_code:
-                        code = check_inbox(page)
+                    log("ACCOUNT CREATED!")
+                    if needs_code and mail_token:
+                        code = check_mail(mail_token, timeout=60)
                         if code:
                             cr = page.evaluate("""(args) => {
                                 const [c, code] = args;
