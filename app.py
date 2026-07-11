@@ -213,38 +213,34 @@ def run_signup():
                 method: 'POST',
                 headers: {'X-CSRFToken': csrf, 'X-Instagram-AJAX': '1', 'Content-Type': 'application/x-www-form-urlencoded'},
                 body: fd, credentials: 'same-origin',
-            }).then(r => r.json().then(b => ({status: r.status, body: b})).catch(() =>
-                r.text().then(t => ({status: r.status, body: t}))
-            ));
+            }).then(r => r.text().then(t => ({status: r.status, body: t})));
         }""", [csrf, email, uname, enc_pwd, full_name, str(dd), str(dm), str(dy)])
 
         log(f"  📡 API: {result['status']}")
         account_created = False
-        if isinstance(result['body'], dict):
-            log(f"    account_created: {result['body'].get('account_created', '?')}")
-            account_created = result['body'].get('account_created', False)
-            errors = result['body'].get('errors', {})
-            if errors:
-                for k, v in errors.items():
-                    log(f"    error {k}: {str(v)[:150]}")
-        else:
-            log(f"    body: {str(result['body'])[:200]}")
+        body_str = str(result['body'])
+        log(f"    body: {body_str[:200]}")
+        if '"account_created":true' in body_str:
+            account_created = True
+        if 'force_sign_up_code' in body_str:
+            log("  🔐 Code required!")
 
         # Try resend code API
         if not account_created and mail_token:
             log("  🔐 Trying to resend verification code...")
-            resend = page.evaluate("""(args) => {
-                const [csrf] = args;
-                return fetch('/api/v1/web/accounts/web_create_ajax/resend_code/', {
-                    method: 'POST',
-                    headers: {'X-CSRFToken': csrf, 'X-Instagram-AJAX': '1', 'Content-Type': 'application/x-www-form-urlencoded'},
-                    body: new URLSearchParams(),
-                    credentials: 'same-origin',
-                }).then(r => r.json().then(b => ({status: r.status, body: b})).catch(() =>
-                    r.text().then(t => ({status: r.status, body: t}))
-                ));
-            }""", [csrf])
-            log(f"    resend: {resend['status']} - {str(resend['body'])[:150]}")
+            try:
+                resend = page.evaluate("""(args) => {
+                    const [csrf] = args;
+                    return fetch('/api/v1/web/accounts/web_create_ajax/resend_code/', {
+                        method: 'POST',
+                        headers: {'X-CSRFToken': csrf, 'X-Instagram-AJAX': '1', 'Content-Type': 'application/x-www-form-urlencoded'},
+                        body: new URLSearchParams(),
+                        credentials: 'same-origin',
+                    }).then(r => r.text().then(t => ({status: r.status, body: t})));
+                }""", [csrf])
+                log(f"    resend: {resend['status']} - {str(resend['body'])[:150]}")
+            except Exception as e:
+                log(f"    resend error: {e}")
             
             # Wait for mail
             log("  📧 Waiting for verification email...")
@@ -252,22 +248,23 @@ def run_signup():
             
             if code:
                 log(f"  🔑 Submitting code: {code}")
-                cres = page.evaluate("""(args) => {
-                    const [csrf, code] = args;
-                    const fd = new URLSearchParams();
-                    fd.append('code', code); fd.append('device_id', '');
-                    return fetch('/api/v1/web/accounts/web_create_ajax/confirm_code/', {
-                        method: 'POST',
-                        headers: {'X-CSRFToken': csrf, 'X-Instagram-AJAX': '1', 'Content-Type': 'application/x-www-form-urlencoded'},
-                        body: fd, credentials: 'same-origin',
-                    }).then(r => r.json().then(b => ({status: r.status, body: b})).catch(() =>
-                        r.text().then(t => ({status: r.status, body: t}))
-                    ));
-                }""", [csrf, code])
-                log(f"    code result: {cres['status']} - {str(cres['body'])[:200]}")
-                if isinstance(cres['body'], dict) and cres['body'].get('account_created'):
-                    account_created = True
-                    log("✅ ACCOUNT CONFIRMED!")
+                try:
+                    cres = page.evaluate("""(args) => {
+                        const [csrf, code] = args;
+                        const fd = new URLSearchParams();
+                        fd.append('code', code); fd.append('device_id', '');
+                        return fetch('/api/v1/web/accounts/web_create_ajax/confirm_code/', {
+                            method: 'POST',
+                            headers: {'X-CSRFToken': csrf, 'X-Instagram-AJAX': '1', 'Content-Type': 'application/x-www-form-urlencoded'},
+                            body: fd, credentials: 'same-origin',
+                        }).then(r => r.text().then(t => ({status: r.status, body: t})));
+                    }""", [csrf, code])
+                    log(f"    code result: {cres['status']} - {str(cres['body'])[:200]}")
+                    if '"account_created":true' in str(cres['body']):
+                        account_created = True
+                        log("✅ ACCOUNT CONFIRMED!")
+                except Exception as e:
+                    log(f"    code confirm error: {e}")
                 time.sleep(5)
                 ss(page)
 
