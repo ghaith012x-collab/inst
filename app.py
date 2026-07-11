@@ -38,7 +38,7 @@ def create_temp_email():
             return None, None, None, None
         domains = domain_resp.json().get("hydra:member", [])
         domain = domains[0]["domain"] if domains else "@mail.tm"
-        local_part = ''.join(random.choices(string.ascii_lowercase, k=12))
+        local_part = ''.join(random.choices(string.ascii_lowercase, k=10))
         email = f"{local_part}{domain}"
         password = "TempPass123!"
         resp = requests.post(f"{MAILTM_API}/accounts", json={"address": email, "password": password}, timeout=10)
@@ -51,7 +51,7 @@ def create_temp_email():
                 return email, token, account_id, password
         return None, None, None, None
     except Exception as e:
-        log(f"  ⚠️ mail.tm error: {e}")
+        log(f"  ⚠️ mail.tm: {e}")
         return None, None, None, None
 
 
@@ -66,25 +66,27 @@ def check_mailtm_inbox(token, account_id, timeout=60):
                 for msg in messages:
                     from_addr = msg.get("from", {}).get("address", "")
                     subject = msg.get("subject", "")
-                    log(f"  📧 Mail from: {from_addr} subject: {subject}")
-                    if "instagram" in from_addr.lower() or "code" in subject.lower() or "confirm" in subject.lower() or "verify" in subject.lower():
+                    log(f"  📧 Mail from: {from_addr} | {subject}")
+                    if any(k in (from_addr + subject).lower() for k in ['instagram', 'code', 'confirm', 'verify']):
                         msg_id = msg.get("id")
                         if msg_id:
-                            msg_resp = requests.get(f"{MAILTM_API}/messages/{msg_id}", headers=headers, timeout=10)
-                            if msg_resp.status_code == 200:
-                                body = msg_resp.json().get("text", "") or ""
+                            m = requests.get(f"{MAILTM_API}/messages/{msg_id}", headers=headers, timeout=10)
+                            if m.status_code == 200:
+                                data = m.json()
+                                body = data.get("text", "") or ""
                                 codes = re.findall(r'\b(\d{5,6})\b', body)
                                 if codes:
-                                    log(f"  ✅ Found code: {codes[0]}")
+                                    log(f"  ✅ Code: {codes[0]}")
                                     return codes[0]
-                                html = msg_resp.json().get("html", [])
-                                for part in html if isinstance(html, list) else [html]:
-                                    if isinstance(part, str):
-                                        codes = re.findall(r'\b(\d{5,6})\b', part)
+                                html_parts = data.get("html", [])
+                                for p in html_parts if isinstance(html_parts, list) else [html_parts]:
+                                    if isinstance(p, str):
+                                        codes = re.findall(r'\b(\d{5,6})\b', p)
                                         if codes:
-                                            log(f"  ✅ Found code: {codes[0]}")
+                                            log(f"  ✅ Code in HTML: {codes[0]}")
                                             return codes[0]
-        except: pass
+        except Exception as e:
+            log(f"  ⚠️ mail check: {e}")
         time.sleep(5)
     return None
 
@@ -103,7 +105,7 @@ def accept_cookies(page):
             btn = page.get_by_role("button", name=text, exact=False)
             if btn.count() > 0 and btn.first.is_visible():
                 btn.first.click(timeout=3000)
-                log(f"  🍪 Cookie accepted: {text}")
+                log(f"  🍪 Cookie accepted")
                 time.sleep(0.5)
                 return True
         except: continue
@@ -158,12 +160,11 @@ def human_delay():
     time.sleep(random.uniform(0.5, 1.2))
 
 def type_slow(locator, text):
-    """Click, clear, and type text slowly like a human."""
     locator.click(timeout=3000)
-    time.sleep(0.2)
+    time.sleep(0.15)
     locator.fill('', timeout=3000)
     time.sleep(0.1)
-    locator.type(text, delay=random.randint(50, 120))
+    locator.type(text, delay=random.randint(50, 100))
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -203,11 +204,11 @@ def run_signup():
         apply_stealth(page)
         setup_ad_block(page)
 
-        # ── Create temp email ──
-        log("📧 Creating temp email...")
+        # ── Create temp email inbox ──
+        log("📧 Creating temp email inbox...")
         email, mail_token, account_id, mail_password = create_temp_email()
         if not email:
-            email = f"{''.join(random.choices(string.ascii_lowercase, k=12))}@mail.tm"
+            email = f"{''.join(random.choices(string.ascii_lowercase, k=10))}@mail.tm"
             log(f"  Using simple email: {email}")
 
         # ── Generate credentials ──
@@ -220,7 +221,7 @@ def run_signup():
         log(f"📋 Generated: name={full_name}  user={username}  email={email}")
 
         # ═══════════════════════════════════════════════
-        #  LOAD PAGE
+        #  LOAD SIGNUP PAGE
         # ═══════════════════════════════════════════════
         log("── Loading Instagram signup page ──")
         page.goto('https://www.instagram.com/accounts/emailsignup/',
@@ -236,108 +237,111 @@ def run_signup():
             latest_screenshot = page.screenshot(type='jpeg', quality=70)
 
         # ═══════════════════════════════════════════════
-        #  FILL FIELDS BY INDEX
+        #  IDENTIFY FIELDS
         # ═══════════════════════════════════════════════
-        # Instagram's current signup page (May 2025+) shows all fields at once:
-        #   input[0]: type='text'   → "Mobile number or email"
-        #   input[1]: type='password' → "Password"
-        #   input[2]: type='text'   → "Full Name" (hidden label)
-        #   input[3]: type='search' aria='Username' → "Username"
-        #   select[0]: Month
-        #   select[1]: Day
-        #   select[2]: Year
-        #   div[role="button"] "Submit" → Submit button
+        # Structure:
+        #   input[0]: type=text     → Email/Phone
+        #   input[1]: type=password → Password
+        #   input[2]: type=text     → Full Name
+        #   input[3]: type=search   → Username
+        #   combobox[0]: Select Month
+        #   combobox[1]: Select Day
+        #   combobox[2]: Select Year
+        #   div[role=button] "Submit"
 
-        log("── Filling all fields ──")
-
-        # Get all visible inputs
         all_inputs = page.locator('input:visible')
-        input_count = all_inputs.count()
-        log(f"  🔍 Found {input_count} visible inputs")
+        ic = all_inputs.count()
+        log(f"  🔍 Found {ic} visible inputs")
 
-        # Input 0: Email/Phone
-        if input_count > 0:
-            type_slow(all_inputs.nth(0), email)
-            log(f"  ✅ Email filled: {email}")
-            human_delay()
-
-        # Input 1: Password
-        if input_count > 1:
-            # Find the password field
-            for i in range(input_count):
-                tp = all_inputs.nth(i).get_attribute('type')
-                if tp == 'password':
-                    type_slow(all_inputs.nth(i), password)
-                    log(f"  ✅ Password filled")
-                    break
-            human_delay()
-
-        # Input 2: Full Name (second text field)
-        name_filled = False
-        text_idx = 0
-        for i in range(input_count):
-            tp = all_inputs.nth(i).get_attribute('type')
-            if tp != 'password' and tp != 'search':
-                if text_idx == 1:  # second non-password, non-search text field
-                    type_slow(all_inputs.nth(i), full_name)
-                    log(f"  ✅ Name filled: {full_name}")
-                    name_filled = True
-                    break
-                text_idx += 1
-
-        if not name_filled:
-            # Fallback: fill the second visible text input directly
-            text_inputs = []
-            for i in range(input_count):
-                tp = all_inputs.nth(i).get_attribute('type')
-                if tp != 'password' and tp != 'search':
-                    text_inputs.append(i)
-            if len(text_inputs) >= 2:
-                type_slow(all_inputs.nth(text_inputs[1]), full_name)
-                log(f"  ✅ Name filled (fallback): {full_name}")
-
+        # ═══════════════════════════════════════════════
+        #  FILL EMAIL (input 0)
+        # ═══════════════════════════════════════════════
+        type_slow(all_inputs.nth(0), email)
+        log(f"  ✅ Email: {email}")
         human_delay()
 
-        # Input 3: Username (search field)
-        for i in range(input_count):
-            tp = all_inputs.nth(i).get_attribute('type')
-            if tp == 'search':
-                type_slow(all_inputs.nth(i), username)
-                log(f"  ✅ Username filled: {username}")
+        # ═══════════════════════════════════════════════
+        #  FILL PASSWORD (type=password)
+        # ═══════════════════════════════════════════════
+        for i in range(ic):
+            if all_inputs.nth(i).get_attribute('type') == 'password':
+                type_slow(all_inputs.nth(i), password)
+                log(f"  ✅ Password filled")
                 break
-
         human_delay()
 
         # ═══════════════════════════════════════════════
-        #  FILL DOB — Month, Day, Year selects
+        #  FILL FULL NAME (2nd visible text input)
         # ═══════════════════════════════════════════════
-        year = random.randint(1991, 2008)
-        month = random.randint(1, 12)
-        day = random.randint(1, 28 if month == 2 else 30)
+        text_found = 0
+        for i in range(ic):
+            tp = all_inputs.nth(i).get_attribute('type')
+            if tp == 'text':
+                if text_found == 0:
+                    text_found = 1  # skip first text (email)
+                elif text_found == 1:
+                    type_slow(all_inputs.nth(i), full_name)
+                    log(f"  ✅ Name: {full_name}")
+                    text_found = 2
+                    break
+        human_delay()
+
+        # ═══════════════════════════════════════════════
+        #  FILL USERNAME (type=search)
+        # ═══════════════════════════════════════════════
+        for i in range(ic):
+            if all_inputs.nth(i).get_attribute('type') == 'search':
+                type_slow(all_inputs.nth(i), username)
+                log(f"  ✅ Username: {username}")
+                break
+        human_delay()
+
+        # ═══════════════════════════════════════════════
+        #  FILL DOB (Month, Day, Year comboboxes)
+        # ═══════════════════════════════════════════════
+        dob_year = random.randint(1991, 2008)
+        dob_month = random.randint(1, 12)
+        dob_day = random.randint(1, 28 if dob_month == 2 else 30)
         month_name = ['', 'January','February','March','April','May','June',
-                      'July','August','September','October','November','December'][month]
-        log(f"  🎂 DOB: {month_name} {day}, {year}")
+                      'July','August','September','October','November','December'][dob_month]
+        log(f"  🎂 DOB: {month_name} {dob_day}, {dob_year}")
 
-        selects = page.locator('select:visible')
-        select_count = selects.count()
-        log(f"  🔍 Found {select_count} visible selects")
+        with lock:
+            latest_screenshot = page.screenshot(type='jpeg', quality=70)
 
-        if select_count >= 3:
-            selects.nth(0).select_option(str(month), timeout=3000)
+        # Month combobox
+        month_cb = page.locator('[role="combobox"][aria-label="Select Month"]')
+        if month_cb.count() > 0:
+            month_cb.first.click(timeout=3000)
+            time.sleep(0.5)
+            page.keyboard.type(month_name, delay=40)
             time.sleep(0.3)
-            selects.nth(1).select_option(str(day), timeout=3000)
+            page.keyboard.press('Enter')
             time.sleep(0.3)
-            selects.nth(2).select_option(str(year), timeout=3000)
-            log(f"  ✅ DOB set via selects")
-        elif select_count > 0:
-            vals = [str(month), str(day), str(year)]
-            for i in range(min(select_count, 3)):
-                try:
-                    selects.nth(i).select_option(vals[i], timeout=3000)
-                except: pass
-            log(f"  ✅ DOB set via {select_count} selects")
+            log(f"  ✅ Month: {month_name}")
 
-        # Screenshot with fields filled
+        # Day combobox
+        day_cb = page.locator('[role="combobox"][aria-label="Select Day"]')
+        if day_cb.count() > 0:
+            day_cb.first.click(timeout=3000)
+            time.sleep(0.5)
+            page.keyboard.type(str(dob_day), delay=40)
+            time.sleep(0.3)
+            page.keyboard.press('Enter')
+            time.sleep(0.3)
+            log(f"  ✅ Day: {dob_day}")
+
+        # Year combobox
+        year_cb = page.locator('[role="combobox"][aria-label="Select Year"]')
+        if year_cb.count() > 0:
+            year_cb.first.click(timeout=3000)
+            time.sleep(0.5)
+            page.keyboard.type(str(dob_year), delay=40)
+            time.sleep(0.3)
+            page.keyboard.press('Enter')
+            time.sleep(0.3)
+            log(f"  ✅ Year: {dob_year}")
+
         with lock:
             latest_screenshot = page.screenshot(type='jpeg', quality=70)
 
@@ -347,19 +351,16 @@ def run_signup():
         log("── Clicking Submit ──")
 
         submit_clicked = False
-
-        # Strategy 1: Click div with role="button" and text "Submit"
-        try:
-            submit_btn = page.locator('div[role="button"]:has-text("Submit")')
-            if submit_btn.count() > 0 and submit_btn.first.is_visible():
-                submit_btn.first.click(timeout=5000)
-                log(f"  👆 Clicked div[role=button] Submit")
-                submit_clicked = True
-        except: pass
+        # Strategy 1: div[role=button] Submit
+        submit_btn = page.locator('div[role="button"]:has-text("Submit")')
+        if submit_btn.count() > 0 and submit_btn.first.is_visible():
+            submit_btn.first.click(timeout=5000)
+            log("  👆 Clicked Submit!")
+            submit_clicked = True
 
         if not submit_clicked:
-            # Strategy 2: Click by role
-            for name in ["Submit", "Sign up", "Sign Up", "Create account", "Next", "Continue"]:
+            # Strategy 2: by role
+            for name in ["Submit", "Sign up", "Sign Up", "Create account"]:
                 try:
                     btn = page.get_by_role("button", name=name, exact=False)
                     if btn.count() > 0 and btn.first.is_visible():
@@ -370,20 +371,10 @@ def run_signup():
                 except: pass
 
         if not submit_clicked:
-            # Strategy 3: Try to press Enter on the last input
-            try:
-                all_inputs = page.locator('input:visible')
-                last = all_inputs.nth(all_inputs.count() - 1)
-                last.press("Enter")
-                log("  👆 Pressed Enter on last input")
-                submit_clicked = True
-            except: pass
-
-        if not submit_clicked:
-            log("  ❌ Could not find submit button!")
+            log("  ❌ Could not click Submit")
 
         # ═══════════════════════════════════════════════
-        #  WAIT FOR SUBMISSION
+        #  WAIT AND CHECK RESULT
         # ═══════════════════════════════════════════════
         time.sleep(5)
         with lock:
@@ -396,31 +387,30 @@ def run_signup():
         #  CHECK FOR VERIFICATION CODE
         # ═══════════════════════════════════════════════
         on_verify = False
-        if "confirm" in current_url or "challenge" in current_url or "verify" in current_url:
+        if any(k in current_url.lower() for k in ['confirm', 'challenge', 'verify']):
             on_verify = True
-            log("  🔍 Verification page detected!")
+            log("  🔍 Verification page!")
         else:
             try:
-                body_text = page.locator('body').inner_text()
-                if 'code' in body_text.lower() and ('email' in body_text.lower() or 'confirm' in body_text.lower() or 'sent' in body_text.lower()):
+                bt = page.locator('body').inner_text()
+                if 'code' in bt.lower() and any(k in bt.lower() for k in ['email', 'confirm', 'sent']):
                     on_verify = True
                     log("  🔍 Verification prompt detected!")
             except: pass
 
         verification_code = None
         if on_verify and mail_token:
-            log("  📧 Waiting for Instagram verification email...")
+            log("  📧 Waiting for verification email...")
             verification_code = check_mailtm_inbox(mail_token, account_id, timeout=45)
 
         if verification_code:
             log(f"  🔑 Entering code: {verification_code}")
-            verify_inputs = page.locator('input:visible')
-            if verify_inputs.count() > 0:
-                type_slow(verify_inputs.first, verification_code)
-                log(f"  ✅ Code entered")
+            vi = page.locator('input:visible')
+            if vi.count() > 0:
+                type_slow(vi.first, verification_code)
+                log("  ✅ Verification code entered")
 
             human_delay()
-            # Click verify/next
             for name in ["Next", "Confirm", "Verify", "Done", "Submit", "Continue"]:
                 try:
                     btn = page.get_by_role("button", name=name, exact=False)
@@ -429,12 +419,12 @@ def run_signup():
                         log(f"  👆 Clicked: {name}")
                         break
                 except: pass
-            time.sleep(4)
+            time.sleep(5)
         elif on_verify:
-            log("  ⚠️ No code received")
+            log("  ⚠️ No verification code received")
 
         # ═══════════════════════════════════════════════
-        #  FINAL
+        #  FINAL STATE
         # ═══════════════════════════════════════════════
         time.sleep(3)
         with lock:
