@@ -36,10 +36,8 @@ MAILTM_API = "https://api.mail.tm"
 def create_temp_email():
     """Create a disposable email inbox via mail.tm API."""
     try:
-        # Generate a random email
         domain_resp = requests.get(f"{MAILTM_API}/domains", timeout=10)
         if domain_resp.status_code != 200:
-            log("  ⚠️ Could not fetch mail.tm domains, using mail.tm directly")
             domain = "@mail.tm"
         else:
             domains = domain_resp.json().get("hydra:member", [])
@@ -49,7 +47,6 @@ def create_temp_email():
         email = f"{local_part}{domain}"
         password = "TempPass123!"
 
-        # Create account
         resp = requests.post(f"{MAILTM_API}/accounts", json={
             "address": email,
             "password": password
@@ -63,12 +60,10 @@ def create_temp_email():
             if token_resp.status_code == 200:
                 token = token_resp.json().get("token", "")
                 account_id = resp.json().get("id", "")
-                log(f"  ✅ Temp email created: {email}")
+                log(f"  ✅ Temp email inbox created: {email}")
                 return email, token, account_id, password
-        else:
-            # Fallback to simple mail.tm format
-            log(f"  ⚠️ mail.tm API error: {resp.status_code}, using simple format")
-            return None, None, None, None
+        log(f"  ⚠️ mail.tm API error: {resp.status_code}, using simple format")
+        return None, None, None, None
     except Exception as e:
         log(f"  ⚠️ mail.tm error: {e}")
         return None, None, None, None
@@ -88,9 +83,7 @@ def check_mailtm_inbox(token, account_id, timeout=60):
                     subject = msg.get("subject", "")
                     log(f"  📧 Mail from: {from_addr} subject: {subject}")
 
-                    # Check if from Instagram
                     if "instagram" in from_addr.lower() or "instagram" in subject.lower() or "confirm" in subject.lower() or "code" in subject.lower() or "verify" in subject.lower():
-                        # Get full message
                         msg_id = msg.get("id")
                         if msg_id:
                             msg_resp = requests.get(
@@ -98,24 +91,23 @@ def check_mailtm_inbox(token, account_id, timeout=60):
                                 headers=headers, timeout=10
                             )
                             if msg_resp.status_code == 200:
+                                # Try text body
                                 body = msg_resp.json().get("text", "") or ""
-                                html_body = msg_resp.json().get("html", "") or []
-
-                                # Extract code from text body
                                 codes = re.findall(r'\b(\d{5,6})\b', body)
                                 if codes:
                                     log(f"  ✅ Found verification code: {codes[0]}")
                                     return codes[0]
 
-                                # Extract from HTML
-                                for part in html_body:
+                                # Try HTML parts
+                                html_body = msg_resp.json().get("html", "") or []
+                                for part in html_body if isinstance(html_body, list) else [html_body]:
                                     if isinstance(part, str):
                                         codes = re.findall(r'\b(\d{5,6})\b', part)
                                         if codes:
-                                            log(f"  ✅ Found verification code in HTML: {codes[0]}")
+                                            log(f"  ✅ Found code in HTML: {codes[0]}")
                                             return codes[0]
 
-                # Delete processed messages
+                # Delete processed messages to keep inbox clean
                 for msg in messages:
                     try:
                         mid = msg.get("id")
@@ -124,7 +116,7 @@ def check_mailtm_inbox(token, account_id, timeout=60):
                     except:
                         pass
         except Exception as e:
-            log(f"  ⚠️ Mail check error: {e}")
+            log(f"  ⚠️ Mail check: {e}")
 
         time.sleep(5)
     return None
@@ -136,26 +128,19 @@ def check_mailtm_inbox(token, account_id, timeout=60):
 
 COOKIE_SELECTORS = [
     'button[data-testid="cookie-policy-manage-dialog-accept-button"]',
-    'div[role="presentation"] button:has-text("Allow all cookies")',
-    'div[role="presentation"] button:has-text("Allow")',
-    'div[role="dialog"] button:has-text("Allow all cookies")',
-    'div[role="dialog"] button:has-text("Accept All")',
-    'div[role="dialog"] button:has-text("Accept")',
     'button:has-text("Allow all cookies")',
-    'button:has-text("Accept all")',
+    'button:has-text("Accept All")',
     'button:has-text("Accept")',
+    'button:has-text("Allow")',
     'button:has-text("Agree")',
     'button:has-text("I accept")',
     'button:has-text("OK")',
-    'button:has-text("Allow")',
     '[aria-label*="Accept"]',
     '[aria-label*="allow" i]',
     'button[id*="accept"]',
     'button[class*="accept"]',
     'div[role="dialog"] button:last-of-type',
-    'div[role="alertdialog"] button:last-of-type',
 ]
-
 
 def accept_cookies(page):
     try:
@@ -169,7 +154,7 @@ def accept_cookies(page):
             el = page.locator(selector)
             if el.count() > 0 and el.first.is_visible():
                 el.first.click(timeout=3000)
-                log(f"  🍪 Cookie accepted: {selector}")
+                log(f"  🍪 Cookie accepted")
                 time.sleep(0.5)
                 return True
         except:
@@ -221,7 +206,6 @@ BLOCKED = [
     'adsafeprotected.com', 'doubleverify.com', 'iasds.net',
 ]
 
-
 def setup_ad_block(page):
     def handler(route):
         if any(d in route.request.url for d in BLOCKED):
@@ -238,7 +222,6 @@ def setup_ad_block(page):
 def human_delay():
     time.sleep(random.uniform(0.5, 1.5))
 
-
 def fill_field(page, selectors, value, label="field"):
     for sel in selectors:
         try:
@@ -252,11 +235,10 @@ def fill_field(page, selectors, value, label="field"):
                 return True
         except:
             continue
-    # Fallback: find matching input by aria/placeholder/name
+    # Fallback: find empty visible input
     try:
         inputs = page.locator('input:visible')
-        count = inputs.count()
-        for i in range(count):
+        for i in range(inputs.count()):
             try:
                 aria = inputs.nth(i).get_attribute('aria-label') or ''
                 placeholder = inputs.nth(i).get_attribute('placeholder') or ''
@@ -273,7 +255,6 @@ def fill_field(page, selectors, value, label="field"):
         pass
     log(f"  ❌ Could not find {label}!")
     return False
-
 
 def click_button(page, selectors, label="button"):
     for sel in selectors:
@@ -299,18 +280,30 @@ def click_button(page, selectors, label="button"):
     log(f"  ❌ Could not click {label}!")
     return False
 
-
-def click_first_visible_button(page, label="button"):
+def debug_page_state(page, prefix=""):
     try:
-        btn = page.locator('button:visible').first
-        if btn.count() > 0:
-            btn.first.click(timeout=5000)
-            log(f"  👆 Clicked {label} (first visible button)")
-            time.sleep(0.5)
-            return True
-    except:
-        pass
-    return False
+        log(f"  {prefix}🔍 URL: {page.url[:120]}")
+        inputs = page.locator('input:visible').count()
+        buttons = page.locator('button:visible').count()
+        selects = page.locator('select:visible').count()
+        log(f"  {prefix}🔍 Inputs:{inputs} Buttons:{buttons} Selects:{selects}")
+        for i in range(min(inputs, 5)):
+            try:
+                inp = page.locator('input:visible').nth(i)
+                aria = inp.get_attribute('aria-label') or ''
+                placeholder = inp.get_attribute('placeholder') or ''
+                name = inp.get_attribute('name') or ''
+                tp = inp.get_attribute('type') or ''
+                log(f"  {prefix}  input[{i}]: type='{tp}' name='{name}' aria='{aria}'")
+            except: pass
+        for i in range(min(buttons, 5)):
+            try:
+                btn = page.locator('button:visible').nth(i)
+                text = btn.inner_text()[:40] if btn.count() > 0 else ''
+                log(f"  {prefix}  button[{i}]: '{text}'")
+            except: pass
+    except Exception as e:
+        log(f"  {prefix}  Debug error: {e}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -329,7 +322,9 @@ def select_dob(page):
     with lock:
         latest_screenshot = page.screenshot(type='jpeg', quality=70)
 
-    # Strategy 1: <select> dropdowns
+    debug_page_state(page, "DOB")
+
+    # Strategy 1: <select> dropdowns by DOM order
     try:
         selects = page.locator('select')
         count = selects.count()
@@ -341,13 +336,21 @@ def select_dob(page):
             selects.nth(2).select_option(str(year), timeout=3000)
             log(f"  ✅ DOB via select: {month}/{day}/{year}")
             return True
-    except:
-        pass
+        elif count > 0:
+            vals = [str(month), str(day), str(year)]
+            for i in range(min(count, 3)):
+                try:
+                    selects.nth(i).select_option(vals[i], timeout=3000)
+                except: pass
+            log(f"  ✅ DOB via {count} selects")
+            return True
+    except Exception as e:
+        log(f"  ⚠️ Select strategy: {e}")
 
-    # Strategy 2: By aria-label
+    # Strategy 2: By aria-label / name
     for label, val in [("month", str(month)), ("day", str(day)), ("year", str(year))]:
-        for sel in [f'select[aria-label*="{label}" i]', f'select[title*="{label}" i]',
-                    f'select[name*="{label}" i]', f'select[id*="{label}" i]']:
+        for sel in [f'select[aria-label*="{label}" i]', f'select[name*="{label}" i]',
+                    f'select[id*="{label}" i]']:
             try:
                 el = page.locator(sel)
                 if el.count() > 0 and el.first.is_visible():
@@ -371,7 +374,7 @@ def select_dob(page):
                 continue
         time.sleep(0.2)
 
-    # Strategy 4: Fill first 3 visible inputs
+    # Strategy 4: Fill first 3 visible text/number inputs
     try:
         text_inputs = page.locator('input[type="text"]:visible, input:not([type]):visible, input[type="number"]:visible')
         count_ti = text_inputs.count()
@@ -381,7 +384,7 @@ def select_dob(page):
                 text_inputs.nth(i).click(timeout=2000)
                 text_inputs.nth(i).fill('', timeout=2000)
                 text_inputs.nth(i).type(dob_vals[i], delay=random.randint(30, 70))
-            log(f"  ✅ DOB via generic inputs: {month}/{day}/{year}")
+            log(f"  ✅ DOB via text inputs: {month}/{day}/{year}")
     except:
         pass
 
@@ -399,20 +402,12 @@ def run_signup():
 
         p = sync_playwright().start()
 
-        # Check Tor
-        proxy_config = None
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(1)
-        tor_available = s.connect_ex(('127.0.0.1', 9050)) == 0
-        s.close()
-        if tor_available:
-            proxy_config = {"server": "socks5://127.0.0.1:9050"}
-            log("🌐 Using Tor SOCKS5 proxy")
-        else:
-            log("⚠️ Tor not available — running without proxy")
+        # Run WITHOUT Tor proxy - Tor may still be bootstrapping
+        # Direct connection is more reliable for form submission
+        log("🌐 Running without proxy for reliability")
 
         browser = p.chromium.launch(
-            proxy=proxy_config,
+            proxy=None,  # No proxy - direct connection
             args=[
                 '--no-sandbox', '--disable-setuid-sandbox',
                 '--disable-dev-shm-usage', '--disable-gpu',
@@ -441,10 +436,9 @@ def run_signup():
         setup_ad_block(page)
 
         # ── Create temp email inbox ──
-        log("📧 Creating temp email...")
+        log("📧 Creating temp email inbox...")
         email, mail_token, account_id, mail_password = create_temp_email()
         if not email:
-            # Fallback to simple format
             email = f"{''.join(random.choices(string.ascii_lowercase, k=12))}@mail.tm"
             log(f"  Using simple email: {email}")
 
@@ -474,75 +468,77 @@ def run_signup():
         with lock:
             latest_screenshot = page.screenshot(type='jpeg', quality=70)
 
-        # Detect what fields are visible
-        has_email = False
-        has_name = False
-        for sel in ['input[name="emailOrPhone"]', 'input[type="email"]', 'input[aria-label*="email" i]', 'input[aria-label*="Mobile" i]', 'input[aria-label*="Phone" i]']:
+        debug_page_state(page, "STEP1")
+
+        # Fill email field
+        email_filled = fill_field(page, [
+            'input[name="emailOrPhone"]', 'input[type="email"]',
+            'input[aria-label*="email" i]', 'input[aria-label*="Mobile" i]',
+            'input[aria-label*="Phone" i]', 'input[placeholder*="email" i]',
+        ], email, 'email')
+
+        if not email_filled:
             try:
-                if page.locator(sel).count() > 0 and page.locator(sel).first.is_visible():
-                    has_email = True; break
+                fi = page.locator('input:visible').first
+                if fi.count() > 0:
+                    fi.click(timeout=3000)
+                    fi.fill('', timeout=3000)
+                    fi.type(email, delay=random.randint(30, 90))
+                    log(f"  ✅ Fallback: filled first input with email")
             except: pass
-        for sel in ['input[name="fullName"]', 'input[aria-label*="name" i]', 'input[aria-label*="Full Name" i]']:
+
+        human_delay()
+        click_button(page, ['button[type="submit"]', 'button:has-text("Next")',
+                            'button:has-text("Sign up")', 'button:has-text("Continue")'],
+                    'Next (email)')
+        time.sleep(3)
+        accept_cookies(page)
+
+        with lock:
+            latest_screenshot = page.screenshot(type='jpeg', quality=70)
+
+        # ═══════════════════════════════════════════════════
+        #  STEP 2: Full Name
+        # ═══════════════════════════════════════════════════
+        log("── Step 2: Full Name ──")
+        debug_page_state(page, "STEP2")
+
+        name_filled = fill_field(page, ['input[name="fullName"]', 'input[aria-label*="name" i]',
+                                        'input[aria-label*="Full Name" i]', 'input[placeholder*="name" i]'],
+                                  full_name, 'full name')
+
+        if not name_filled:
             try:
-                if page.locator(sel).count() > 0 and page.locator(sel).first.is_visible():
-                    has_name = True; break
+                inputs = page.locator('input:visible')
+                for i in range(inputs.count()):
+                    try:
+                        if not inputs.nth(i).input_value():
+                            inputs.nth(i).click(timeout=2000)
+                            inputs.nth(i).fill('', timeout=2000)
+                            inputs.nth(i).type(full_name, delay=random.randint(30, 90))
+                            log(f"  ✅ Fallback: filled empty input with name")
+                            break
+                    except: continue
             except: pass
 
-        log(f"  🔍 Detected: email={has_email}  name={has_name}")
-
-        if not has_email and not has_name:
-            log("  ⚠️ No known fields! Trying first visible input...")
-            try:
-                first_input = page.locator('input:visible').first
-                if first_input.count() > 0:
-                    first_input.click(timeout=3000)
-                    first_input.fill('', timeout=3000)
-                    first_input.type(email, delay=random.randint(30, 90))
-                    log(f"  ✅ Filled first input with email")
-                    has_email = True
-            except: pass
-            try:
-                btn = page.locator('button:visible').first
-                if btn.count() > 0:
-                    btn.click(timeout=3000)
-                    log(f"  👆 Clicked first button")
-            except: pass
-            time.sleep(2)
-
-        if has_email:
-            fill_field(page, [
-                'input[name="emailOrPhone"]', 'input[type="email"]',
-                'input[aria-label*="email" i]', 'input[aria-label*="Mobile" i]',
-                'input[aria-label*="Phone" i]', 'input[placeholder*="email" i]',
-                'input[placeholder*="phone" i]',
-            ], email, 'email')
-            human_delay()
-            click_button(page, ['button[type="submit"]', 'button:has-text("Next")',
-                                'button:has-text("Sign up")', 'button:has-text("Continue")'],
-                        'Next (email)')
-            time.sleep(3)
-
-        if has_name:
-            fill_field(page, ['input[name="fullName"]', 'input[aria-label*="name" i]',
-                              'input[aria-label*="Full Name" i]', 'input[placeholder*="name" i]'],
-                      full_name, 'full name')
-            human_delay()
-            click_button(page, ['button[type="submit"]', 'button:has-text("Next")',
-                                'button:has-text("Continue")'],
-                        'Next (name)')
-            time.sleep(3)
-
+        human_delay()
+        click_button(page, ['button[type="submit"]', 'button:has-text("Next")',
+                            'button:has-text("Continue")'], 'Next (name)')
+        time.sleep(3)
         accept_cookies(page)
         with lock:
             latest_screenshot = page.screenshot(type='jpeg', quality=70)
 
         # ═══════════════════════════════════════════════════
-        #  STEP 2: Username
+        #  STEP 3: Username
         # ═══════════════════════════════════════════════════
-        log("── Step 2: Username ──")
+        log("── Step 3: Username ──")
+        debug_page_state(page, "STEP3")
+
         fill_field(page, ['input[name="username"]', 'input[aria-label="Username"]',
                           'input[aria-label*="username" i]', 'input[placeholder*="username" i]'],
                   username, 'username')
+
         human_delay()
         click_button(page, ['button[type="submit"]', 'button:has-text("Next")',
                             'button:has-text("Continue")', 'button:has-text("Sign up")'],
@@ -553,13 +549,16 @@ def run_signup():
             latest_screenshot = page.screenshot(type='jpeg', quality=70)
 
         # ═══════════════════════════════════════════════════
-        #  STEP 3: Password
+        #  STEP 4: Password
         # ═══════════════════════════════════════════════════
-        log("── Step 3: Password ──")
+        log("── Step 4: Password ──")
+        debug_page_state(page, "STEP4")
+
         fill_field(page, ['input[name="password"]', 'input[aria-label="Password"]',
                           'input[aria-label*="password" i]', 'input[type="password"]',
                           'input[placeholder*="password" i]'],
                   password, 'password')
+
         human_delay()
         click_button(page, ['button[type="submit"]', 'button:has-text("Next")',
                             'button:has-text("Continue")', 'button:has-text("Sign up")',
@@ -571,10 +570,12 @@ def run_signup():
             latest_screenshot = page.screenshot(type='jpeg', quality=70)
 
         # ═══════════════════════════════════════════════════
-        #  STEP 4: Date of Birth (if shown)
+        #  STEP 5: Date of Birth
         # ═══════════════════════════════════════════════════
-        log("── Step 4: Date of Birth ──")
-        # Check if DOB is on the page
+        log("── Step 5: Date of Birth ──")
+        debug_page_state(page, "STEP5")
+
+        # Check if DOB fields exist
         has_dob = False
         for sel in ['select:visible', 'input[aria-label*="month" i]', 'input[aria-label*="birth" i]',
                     'input[aria-label*="date" i]', 'input[placeholder*="birth" i]']:
@@ -592,15 +593,21 @@ def run_signup():
             time.sleep(3)
             accept_cookies(page)
         else:
-            log("  ⏭️ No DOB fields detected, skipping")
+            log("  ⏭️ No DOB fields detected")
+            # Maybe DOB was already shown on an earlier step
+            # Try clicking next anyway
+            click_button(page, ['button[type="submit"]', 'button:has-text("Next")',
+                                'button:has-text("Continue")', 'button:has-text("Sign up")'],
+                        'Next (maybe DOB)')
+            time.sleep(2)
 
         with lock:
             latest_screenshot = page.screenshot(type='jpeg', quality=70)
 
         # ═══════════════════════════════════════════════════
-        #  STEP 5: Email verification code
+        #  STEP 6: Email verification code
         # ═══════════════════════════════════════════════════
-        log("── Step 5: Email Verification ──")
+        log("── Step 6: Email Verification ──")
 
         # Check if we're on a verification page
         on_verify = False
@@ -609,7 +616,6 @@ def run_signup():
             on_verify = True
             log("  🔍 Verification page detected!")
         else:
-            # Check for "enter confirmation code" text
             try:
                 body_text = page.locator('body').inner_text()
                 if 'code' in body_text.lower() and ('email' in body_text.lower() or 'confirm' in body_text.lower()):
@@ -624,22 +630,26 @@ def run_signup():
             verification_code = check_mailtm_inbox(mail_token, account_id, timeout=45)
 
         if verification_code:
-            log(f"  🔑 Entering verification code: {verification_code}")
-            # Try to find the verification code input
+            log(f"  🔑 Entering code: {verification_code}")
             fill_field(page, [
-                'input[inputmode="numeric"]', 'input[type="tel"]', 'input[type="text"]',
+                'input[inputmode="numeric"]', 'input[type="tel"]',
                 'input[aria-label*="code" i]', 'input[aria-label*="confirm" i]',
                 'input[placeholder*="code" i]', 'input[name*="code" i]',
-            ], verification_code, 'verification code')
+                'input:visible',  # last resort
+            ], verification_code, 'code')
 
             human_delay()
             click_button(page, ['button[type="submit"]', 'button:has-text("Next")',
                                 'button:has-text("Confirm")', 'button:has-text("Verify")',
                                 'button:has-text("Done")', 'button:has-text("Submit")'],
-                        'Verify code')
+                        'Verify')
             time.sleep(4)
         elif on_verify:
-            log("  ⚠️ No verification code received")
+            log("  ⚠️ No code received - checking manual entry...")
+            # Try to proceed anyway
+            click_button(page, ['button:has-text("Next")', 'button:has-text("Continue")',
+                                'button[type="submit"]'], 'Skip verify?')
+            time.sleep(2)
         else:
             log("  ⏭️ No verification page detected")
 
@@ -653,21 +663,21 @@ def run_signup():
         current_url = page.url
         log(f"📄 Final URL: {current_url[:120]}")
 
-        # Check for success indicators
+        # Check success
         is_success = False
         try:
-            body_text = page.locator('body').inner_text()
-            if "welcome" in body_text.lower() or "let's go" in body_text.lower() or "start exploring" in body_text.lower() or "logged in" in body_text.lower():
+            bt = page.locator('body').inner_text()
+            if any(kw in bt.lower() for kw in ["welcome", "let's go", "start exploring", "logged in", "find people"]):
                 is_success = True
                 log("✅ SUCCESS - Account created!")
         except:
             pass
 
-        if "accounts/emailsignup" in current_url or "signup" in current_url:
-            log("⚠️ Still on signup page - account may not have been created")
+        if "emailsignup" in current_url or "signup" in current_url:
+            log("⚠️ Still on signup page")
         else:
             is_success = True
-            log("✅ Navigated away from signup page - likely success!")
+            log("✅ Navigated away from signup - likely success!")
 
         with lock:
             latest_credentials = {
@@ -681,15 +691,6 @@ def run_signup():
             }
 
         log(f"🏁 Done: {username} / {email} | success={is_success}")
-
-        # Rotate Tor
-        if tor_available:
-            try:
-                requests.post('http://127.0.0.1:9051', data='SIGNAL NEWNYM', timeout=2)
-                log("🔄 Tor circuit rotated")
-            except:
-                pass
-
         p.stop()
 
     except Exception as e:
@@ -708,7 +709,6 @@ def run_signup():
 def index():
     return render_template('dashboard.html')
 
-
 @app.route('/stream')
 def stream():
     def gen():
@@ -721,11 +721,9 @@ def stream():
             time.sleep(1)
     return Response(gen(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
-
 @app.route('/status')
 def status():
     return jsonify({'alive': True, 'port': PORT, 'log': status_log[-30:]})
-
 
 @app.route('/create', methods=['POST'])
 def create():
@@ -734,18 +732,15 @@ def create():
     threading.Thread(target=run_signup, daemon=True).start()
     return jsonify({'status': 'started'})
 
-
 @app.route('/credentials')
 def creds():
     with lock:
         return jsonify(latest_credentials)
 
-
 @app.route('/logs')
 def logs():
     with lock:
         return jsonify(status_log[-50:])
-
 
 if __name__ == '__main__':
     log(f"🚀 STARTING ON PORT {PORT}")
