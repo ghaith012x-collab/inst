@@ -40,15 +40,15 @@ def create_temp_email():
         domain = domains[0]["domain"] if domains else "@mail.tm"
         local_part = ''.join(random.choices(string.ascii_lowercase, k=10))
         email = f"{local_part}{domain}"
-        password = "TempPass123!"
-        resp = requests.post(f"{MAILTM_API}/accounts", json={"address": email, "password": password}, timeout=10)
+        pwd = "TempPass123!"
+        resp = requests.post(f"{MAILTM_API}/accounts", json={"address": email, "password": pwd}, timeout=10)
         if resp.status_code == 201:
-            token_resp = requests.post(f"{MAILTM_API}/token", json={"address": email, "password": password}, timeout=10)
+            token_resp = requests.post(f"{MAILTM_API}/token", json={"address": email, "password": pwd}, timeout=10)
             if token_resp.status_code == 200:
                 token = token_resp.json().get("token", "")
                 account_id = resp.json().get("id", "")
-                log(f"  ✅ Temp email: {email}")
-                return email, token, account_id, password
+                log(f"  ✅ Temp inbox: {email}")
+                return email, token, account_id, pwd
         return None, None, None, None
     except Exception as e:
         log(f"  ⚠️ mail.tm: {e}")
@@ -66,7 +66,7 @@ def check_mailtm_inbox(token, account_id, timeout=60):
                 for msg in messages:
                     from_addr = msg.get("from", {}).get("address", "")
                     subject = msg.get("subject", "")
-                    log(f"  📧 Mail from: {from_addr} | {subject}")
+                    log(f"  📧 From: {from_addr} | {subject}")
                     if any(k in (from_addr + subject).lower() for k in ['instagram', 'code', 'confirm', 'verify']):
                         msg_id = msg.get("id")
                         if msg_id:
@@ -78,10 +78,10 @@ def check_mailtm_inbox(token, account_id, timeout=60):
                                 if codes:
                                     log(f"  ✅ Code: {codes[0]}")
                                     return codes[0]
-                                html_parts = data.get("html", [])
-                                for p in html_parts if isinstance(html_parts, list) else [html_parts]:
-                                    if isinstance(p, str):
-                                        codes = re.findall(r'\b(\d{5,6})\b', p)
+                                html_parts = data.get("html", []) if isinstance(data.get("html"), list) else [data.get("html", "")]
+                                for part in html_parts:
+                                    if isinstance(part, str):
+                                        codes = re.findall(r'\b(\d{5,6})\b', part)
                                         if codes:
                                             log(f"  ✅ Code in HTML: {codes[0]}")
                                             return codes[0]
@@ -166,6 +166,38 @@ def type_slow(locator, text):
     time.sleep(0.1)
     locator.type(text, delay=random.randint(50, 100))
 
+def click_button_by_text(page, texts, label="button"):
+    for text in texts:
+        try:
+            btn = page.get_by_role("button", name=text, exact=False)
+            if btn.count() > 0 and btn.first.is_visible():
+                btn.first.click(timeout=5000)
+                log(f"  👆 Clicked '{text}'")
+                time.sleep(0.5)
+                return True
+        except: pass
+    # Also try div[role=button]
+    for text in texts:
+        try:
+            btn = page.locator(f'div[role="button"]:has-text("{text}")')
+            if btn.count() > 0 and btn.first.is_visible():
+                btn.first.click(timeout=5000)
+                log(f"  👆 Clicked div[role=button] '{text}'")
+                time.sleep(0.5)
+                return True
+        except: pass
+    log(f"  ❌ Could not click {label}")
+    return False
+
+def page_contains(page, texts):
+    try:
+        body = page.locator('body').inner_text()
+        for t in texts:
+            if t.lower() in body.lower():
+                return True
+    except: pass
+    return False
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  MAIN SIGNUP FLOW
@@ -215,7 +247,7 @@ def run_signup():
         first_names = ['Alex','Jordan','Casey','Riley','Morgan','Taylor','Jamie','Avery','Quinn','Skyler','Drew','Reese']
         last_names = ['Smith','Jones','Brown','Davis','Lee','Cruz','Wang','Kim','Patel','Garcia','Miller','Wilson']
         full_name = f"{random.choice(first_names)} {random.choice(last_names)}"
-        username = f"{full_name.replace(' ','').lower()}{random.randint(10, 9999)}"
+        username = f"{full_name.replace(' ','').lower()}{random.randint(100, 99999)}"
         password = ''.join(random.choices(string.ascii_letters + string.digits + '!@#$', k=14))
 
         log(f"📋 Generated: name={full_name}  user={username}  email={email}")
@@ -237,32 +269,18 @@ def run_signup():
             latest_screenshot = page.screenshot(type='jpeg', quality=70)
 
         # ═══════════════════════════════════════════════
-        #  IDENTIFY FIELDS
+        #  FILL ALL FIELDS
         # ═══════════════════════════════════════════════
-        # Structure:
-        #   input[0]: type=text     → Email/Phone
-        #   input[1]: type=password → Password
-        #   input[2]: type=text     → Full Name
-        #   input[3]: type=search   → Username
-        #   combobox[0]: Select Month
-        #   combobox[1]: Select Day
-        #   combobox[2]: Select Year
-        #   div[role=button] "Submit"
-
         all_inputs = page.locator('input:visible')
         ic = all_inputs.count()
         log(f"  🔍 Found {ic} visible inputs")
 
-        # ═══════════════════════════════════════════════
-        #  FILL EMAIL (input 0)
-        # ═══════════════════════════════════════════════
+        # Email (input 0)
         type_slow(all_inputs.nth(0), email)
         log(f"  ✅ Email: {email}")
         human_delay()
 
-        # ═══════════════════════════════════════════════
-        #  FILL PASSWORD (type=password)
-        # ═══════════════════════════════════════════════
+        # Password (type=password)
         for i in range(ic):
             if all_inputs.nth(i).get_attribute('type') == 'password':
                 type_slow(all_inputs.nth(i), password)
@@ -270,15 +288,13 @@ def run_signup():
                 break
         human_delay()
 
-        # ═══════════════════════════════════════════════
-        #  FILL FULL NAME (2nd visible text input)
-        # ═══════════════════════════════════════════════
+        # Full Name (2nd text input)
         text_found = 0
         for i in range(ic):
             tp = all_inputs.nth(i).get_attribute('type')
             if tp == 'text':
                 if text_found == 0:
-                    text_found = 1  # skip first text (email)
+                    text_found = 1
                 elif text_found == 1:
                     type_slow(all_inputs.nth(i), full_name)
                     log(f"  ✅ Name: {full_name}")
@@ -286,9 +302,7 @@ def run_signup():
                     break
         human_delay()
 
-        # ═══════════════════════════════════════════════
-        #  FILL USERNAME (type=search)
-        # ═══════════════════════════════════════════════
+        # Username (type=search)
         for i in range(ic):
             if all_inputs.nth(i).get_attribute('type') == 'search':
                 type_slow(all_inputs.nth(i), username)
@@ -297,7 +311,7 @@ def run_signup():
         human_delay()
 
         # ═══════════════════════════════════════════════
-        #  FILL DOB (Month, Day, Year comboboxes)
+        #  FILL DOB
         # ═══════════════════════════════════════════════
         dob_year = random.randint(1991, 2008)
         dob_month = random.randint(1, 12)
@@ -309,34 +323,34 @@ def run_signup():
         with lock:
             latest_screenshot = page.screenshot(type='jpeg', quality=70)
 
-        # Month combobox
-        month_cb = page.locator('[role="combobox"][aria-label="Select Month"]')
-        if month_cb.count() > 0:
-            month_cb.first.click(timeout=3000)
-            time.sleep(0.5)
-            page.keyboard.type(month_name, delay=40)
+        # Month
+        mc = page.locator('[role="combobox"][aria-label="Select Month"]')
+        if mc.count() > 0:
+            mc.first.click(timeout=3000)
+            time.sleep(0.4)
+            page.keyboard.type(month_name, delay=30)
             time.sleep(0.3)
             page.keyboard.press('Enter')
             time.sleep(0.3)
             log(f"  ✅ Month: {month_name}")
 
-        # Day combobox
-        day_cb = page.locator('[role="combobox"][aria-label="Select Day"]')
-        if day_cb.count() > 0:
-            day_cb.first.click(timeout=3000)
-            time.sleep(0.5)
-            page.keyboard.type(str(dob_day), delay=40)
+        # Day
+        dc = page.locator('[role="combobox"][aria-label="Select Day"]')
+        if dc.count() > 0:
+            dc.first.click(timeout=3000)
+            time.sleep(0.4)
+            page.keyboard.type(str(dob_day), delay=30)
             time.sleep(0.3)
             page.keyboard.press('Enter')
             time.sleep(0.3)
             log(f"  ✅ Day: {dob_day}")
 
-        # Year combobox
-        year_cb = page.locator('[role="combobox"][aria-label="Select Year"]')
-        if year_cb.count() > 0:
-            year_cb.first.click(timeout=3000)
-            time.sleep(0.5)
-            page.keyboard.type(str(dob_year), delay=40)
+        # Year
+        yc = page.locator('[role="combobox"][aria-label="Select Year"]')
+        if yc.count() > 0:
+            yc.first.click(timeout=3000)
+            time.sleep(0.4)
+            page.keyboard.type(str(dob_year), delay=30)
             time.sleep(0.3)
             page.keyboard.press('Enter')
             time.sleep(0.3)
@@ -350,31 +364,10 @@ def run_signup():
         # ═══════════════════════════════════════════════
         log("── Clicking Submit ──")
 
-        submit_clicked = False
-        # Strategy 1: div[role=button] Submit
-        submit_btn = page.locator('div[role="button"]:has-text("Submit")')
-        if submit_btn.count() > 0 and submit_btn.first.is_visible():
-            submit_btn.first.click(timeout=5000)
-            log("  👆 Clicked Submit!")
-            submit_clicked = True
-
-        if not submit_clicked:
-            # Strategy 2: by role
-            for name in ["Submit", "Sign up", "Sign Up", "Create account"]:
-                try:
-                    btn = page.get_by_role("button", name=name, exact=False)
-                    if btn.count() > 0 and btn.first.is_visible():
-                        btn.first.click(timeout=5000)
-                        log(f"  👆 Clicked via role: {name}")
-                        submit_clicked = True
-                        break
-                except: pass
-
-        if not submit_clicked:
-            log("  ❌ Could not click Submit")
+        click_button_by_text(page, ["Submit", "Sign up", "Sign Up", "Create account"], "Submit")
 
         # ═══════════════════════════════════════════════
-        #  WAIT AND CHECK RESULT
+        #  WAIT AND CHECK FOR ERRORS/VERIFICATION
         # ═══════════════════════════════════════════════
         time.sleep(5)
         with lock:
@@ -384,49 +377,64 @@ def run_signup():
         log(f"📄 URL after submit: {current_url[:120]}")
 
         # ═══════════════════════════════════════════════
-        #  CHECK FOR VERIFICATION CODE
+        #  CHECK FOR USERNAME TAKEN ERROR → Try again
         # ═══════════════════════════════════════════════
-        on_verify = False
-        if any(k in current_url.lower() for k in ['confirm', 'challenge', 'verify']):
-            on_verify = True
-            log("  🔍 Verification page!")
-        else:
-            try:
-                bt = page.locator('body').inner_text()
-                if 'code' in bt.lower() and any(k in bt.lower() for k in ['email', 'confirm', 'sent']):
-                    on_verify = True
-                    log("  🔍 Verification prompt detected!")
-            except: pass
-
-        verification_code = None
-        if on_verify and mail_token:
-            log("  📧 Waiting for verification email...")
-            verification_code = check_mailtm_inbox(mail_token, account_id, timeout=45)
-
-        if verification_code:
-            log(f"  🔑 Entering code: {verification_code}")
-            vi = page.locator('input:visible')
-            if vi.count() > 0:
-                type_slow(vi.first, verification_code)
-                log("  ✅ Verification code entered")
-
+        if page_contains(page, ["not available", "already taken", "username is invalid", "Input Username"]):
+            log("  ⚠️ Username issue detected! Generating new username...")
+            username = f"{full_name.replace(' ','').lower()}{random.randint(100, 99999)}"
+            log(f"  🔄 New username: {username}")
+            # Try to fill the username field again
+            for i in range(page.locator('input:visible').count()):
+                if page.locator('input:visible').nth(i).get_attribute('type') == 'search':
+                    type_slow(page.locator('input:visible').nth(i), username)
+                    log(f"  ✅ Re-filled username: {username}")
+                    break
             human_delay()
-            for name in ["Next", "Confirm", "Verify", "Done", "Submit", "Continue"]:
-                try:
-                    btn = page.get_by_role("button", name=name, exact=False)
-                    if btn.count() > 0 and btn.first.is_visible():
-                        btn.first.click(timeout=5000)
-                        log(f"  👆 Clicked: {name}")
-                        break
-                except: pass
+            click_button_by_text(page, ["Submit", "Sign up", "Sign Up"], "Submit (retry)")
             time.sleep(5)
-        elif on_verify:
-            log("  ⚠️ No verification code received")
+            with lock:
+                latest_screenshot = page.screenshot(type='jpeg', quality=70)
+            current_url = page.url
+            log(f"📄 URL after retry: {current_url[:120]}")
+
+        # ═══════════════════════════════════════════════
+        #  CHECK FOR VERIFICATION CHALLENGE
+        # ═══════════════════════════════════════════════
+        is_verify = page_contains(page, ["confirm it's you", "Help us confirm", "verification", "confirmation step", "security check"])
+        if is_verify:
+            log("  🔒 Instagram verification challenge detected!")
+            log("  👆 Clicking Next to proceed through verification...")
+            click_button_by_text(page, ["Next", "Continue", "Confirm"], "Verification Next")
+            time.sleep(3)
+            with lock:
+                latest_screenshot = page.screenshot(type='jpeg', quality=70)
+
+        # ═══════════════════════════════════════════════
+        #  CHECK FOR EMAIL VERIFICATION CODE
+        # ═══════════════════════════════════════════════
+        if is_verify or page_contains(page, ["code", "email", "sent you"]):
+            log("  📧 Checking for verification email...")
+            verification_code = check_mailtm_inbox(mail_token, account_id, timeout=45) if mail_token else None
+
+            if verification_code:
+                log(f"  🔑 Entering code: {verification_code}")
+                vi = page.locator('input:visible')
+                if vi.count() > 0:
+                    type_slow(vi.first, verification_code)
+                    log("  ✅ Code entered")
+                human_delay()
+                click_button_by_text(page, ["Next", "Confirm", "Verify", "Done", "Submit", "Continue"], "Verify code")
+                time.sleep(5)
+            else:
+                log("  ⚠️ No verification code received, proceeding...")
+                # Try clicking next anyway
+                click_button_by_text(page, ["Next", "Continue", "Skip"], "Skip verification")
+                time.sleep(3)
 
         # ═══════════════════════════════════════════════
         #  FINAL STATE
         # ═══════════════════════════════════════════════
-        time.sleep(3)
+        time.sleep(4)
         with lock:
             latest_screenshot = page.screenshot(type='jpeg', quality=70)
 
@@ -436,7 +444,9 @@ def run_signup():
         is_success = False
         try:
             bt = page.locator('body').inner_text()
-            if any(kw in bt.lower() for kw in ["welcome", "let's go", "start exploring", "logged in", "find people", "save your login"]):
+            success_kw = ["welcome", "let's go", "start exploring", "logged in", "find people",
+                         "save your login", "you're logged in", "signed in"]
+            if any(kw in bt.lower() for kw in success_kw):
                 is_success = True
                 log("✅ SUCCESS - Account created!")
         except: pass
@@ -447,16 +457,27 @@ def run_signup():
             is_success = True
             log("✅ Navigated away from signup page!")
 
-        with lock:
-            latest_credentials = {
-                'email': email,
-                'username': username,
-                'password': password,
-                'full_name': full_name,
-                'status': 'success' if is_success else 'completed',
-                'verification_code': verification_code or '',
-                'final_url': current_url[:120],
-            }
+        if is_success:
+            with lock:
+                latest_credentials = {
+                    'email': email,
+                    'username': username,
+                    'password': password,
+                    'full_name': full_name,
+                    'status': 'success',
+                    'final_url': current_url[:120],
+                }
+        else:
+            with lock:
+                latest_credentials = {
+                    'email': email,
+                    'username': username,
+                    'password': password,
+                    'full_name': full_name,
+                    'status': 'completed',
+                    'verification_triggered': is_verify,
+                    'final_url': current_url[:120],
+                }
 
         log(f"🏁 Done: {username} / {email} | success={is_success}")
         p.stop()
