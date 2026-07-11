@@ -63,76 +63,6 @@ def get_email(page):
         time.sleep(1)
     return None
 
-def solve_recaptcha(page):
-    """Find and click the reCAPTCHA checkbox, then try to solve."""
-    # First click Next to trigger reCAPTCHA
-    for i in range(3):
-        page.evaluate("""() => {
-            const btns = document.querySelectorAll('[role="button"]');
-            for (const b of btns) {
-                if (b.textContent.trim().toLowerCase() === 'next') {
-                    b.removeAttribute('aria-disabled');
-                    b.click(); return;
-                }
-            }
-        }""")
-        time.sleep(4)
-        ss(page)
-    
-    # Now look for reCAPTCHA iframe
-    log("Looking for reCAPTCHA checkbox...")
-    for _ in range(20):
-        iframes = page.locator('iframe')
-        for i in range(iframes.count()):
-            try:
-                src = (iframes.nth(i).get_attribute('src') or '').lower()
-                title = (iframes.nth(i).get_attribute('title') or '').lower()
-                if 'recaptcha' in src or 'recaptcha' in title:
-                    log(f"  Found reCAPTCHA iframe!")
-                    frame = iframes.nth(i).content_frame()
-                    if frame:
-                        # Click the checkbox
-                        anchor = frame.locator('#recaptcha-anchor')
-                        if anchor.count() > 0 and anchor.first.is_visible():
-                            anchor.first.click(timeout=5000)
-                            log("  Clicked checkbox!")
-                            time.sleep(3)
-                            
-                            # Check if challenge appeared
-                            challenge = frame.locator('.rc-imageselect-desc-wrapper, .rc-challenge-container')
-                            if challenge.count() > 0 or anchor.first.get_attribute('aria-checked') == 'true':
-                                log("  reCAPTCHA triggered!")
-                                
-                                # Try audio challenge
-                                audio_btn = frame.locator('#recaptcha-audio-button')
-                                if audio_btn.count() > 0:
-                                    audio_btn.first.click(timeout=3000)
-                                    log("  Clicked audio challenge!")
-                                    time.sleep(2)
-                                    
-                                    # Get audio source
-                                    audio_src = frame.evaluate("""() => {
-                                        const audio = document.querySelector('audio');
-                                        return audio ? audio.src : '';
-                                    }""")
-                                    if audio_src:
-                                        log(f"  Got audio: {audio_src[:60]}...")
-                                        # Download audio and use Google Speech-to-Text
-                                        try:
-                                            audio_data = requests.get(audio_src, timeout=10).content
-                                            # Use free speech-to-text API
-                                            resp = requests.post(
-                                                'https://speech.googleapis.com/v1/speech:recognize',
-                                                # Use a free alternative - Google Speech API without key
-                                                # Actually, let's use the built-in Chrome speech recognition
-                                                timeout=10
-                                            )
-                                        except: pass
-                                return True
-            except: pass
-        time.sleep(1)
-    return False
-
 def run_signup():
     global latest_screenshot, latest_credentials
     try:
@@ -144,8 +74,7 @@ def run_signup():
             proxy=None,
             args=['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage',
                   '--disable-gpu','--disable-blink-features=AutomationControlled',
-                  '--disable-infobars','--window-size=1366,768',
-                  '--disable-web-security', '--allow-running-insecure-content'],
+                  '--disable-infobars','--window-size=1366,768'],
             headless=True,
         )
         ctx = browser.new_context(
@@ -227,7 +156,7 @@ def run_signup():
                 time.sleep(0.2); page.keyboard.press('Enter'); time.sleep(0.3)
         ss(page)
 
-        # Submit
+        # ===== SUBMIT =====
         log("Clicking Submit...")
         page.evaluate("""() => {
             const btns = document.querySelectorAll('[role="button"]');
@@ -236,13 +165,91 @@ def run_signup():
         time.sleep(8)
         ss(page)
 
-        # Solve reCAPTCHA
-        log("Solving reCAPTCHA...")
-        solved = solve_recaptcha(page)
-        if solved:
-            log("reCAPTCHA process started!")
+        # ===== HANDLE SECURITY + RECAPTCHA =====
+        log("Handling security/reCAPTCHA...")
+        
+        # Phase 1: Click Next in dialog to trigger reCAPTCHA
+        for i in range(3):
+            has = page.evaluate("""() => {
+                const d = document.querySelector('[role="dialog"]');
+                return d ? true : false;
+            }""")
+            if not has:
+                log("No dialog!")
+                break
+            log(f"Clicking Next ({i+1}/3)...")
+            page.evaluate("""() => {
+                const btns = document.querySelectorAll('[role="button"]');
+                for (const b of btns) {
+                    if (b.textContent.trim().toLowerCase() === 'next') {
+                        b.removeAttribute('aria-disabled'); b.click(); return;
+                    }
+                }
+            }""")
             time.sleep(5)
-            # Click Next after solving
+            ss(page)
+        
+        # Phase 2: Look for reCAPTCHA iframe
+        log("Searching for reCAPTCHA...")
+        captcha_found = False
+        for _ in range(20):
+            iframes = page.locator('iframe')
+            for i in range(iframes.count()):
+                try:
+                    src = (iframes.nth(i).get_attribute('src') or '').lower()
+                    title = (iframes.nth(i).get_attribute('title') or '').lower()
+                    if 'recaptcha' in src or 'recaptcha' in title or 'google.com/recaptcha' in src:
+                        log(f"reCAPTCHA iframe found!")
+                        frame = iframes.nth(i).content_frame()
+                        if frame:
+                            # Click checkbox
+                            anchor = frame.locator('#recaptcha-anchor')
+                            if anchor.count() > 0:
+                                anchor.first.click(timeout=5000)
+                                log("Clicked checkbox!")
+                                time.sleep(3)
+                                captcha_found = True
+                                
+                                # Check if image challenge appeared
+                                challenge = frame.locator('.rc-imageselect-desc-wrapper, .rc-challenge-container, .rc-imageselect-target')
+                                if challenge.count() > 0:
+                                    log("Image challenge appeared!")
+                                    # Try audio challenge
+                                    audio_btn = frame.locator('#recaptcha-audio-button')
+                                    if audio_btn.count() > 0:
+                                        audio_btn.first.click(timeout=3000)
+                                        log("Clicked audio button!")
+                                        time.sleep(3)
+                                break
+                except: pass
+            if captcha_found:
+                break
+            time.sleep(1)
+        
+        if not captcha_found:
+            log("No reCAPTCHA found")
+            # Try clicking Next once more
+            page.evaluate("""() => {
+                const btns = document.querySelectorAll('[role="button"]');
+                for (const b of btns) {
+                    if (b.textContent.trim().toLowerCase() === 'next') {
+                        b.removeAttribute('aria-disabled'); b.click(); return;
+                    }
+                }
+            }""")
+            time.sleep(5)
+            ss(page)
+        
+        # Phase 3: Click Next after captcha
+        for i in range(3):
+            has = page.evaluate("""() => {
+                const d = document.querySelector('[role="dialog"]');
+                return d ? true : false;
+            }""")
+            if not has:
+                log("Form submitted!")
+                break
+            log(f"Post-captcha Next ({i+1})...")
             page.evaluate("""() => {
                 const btns = document.querySelectorAll('[role="button"]');
                 for (const b of btns) {
@@ -254,7 +261,7 @@ def run_signup():
             time.sleep(5)
             ss(page)
 
-        # Username retry
+        # ===== USERNAME RETRY =====
         for r in range(5):
             try:
                 bt = page.locator('body').inner_text()
