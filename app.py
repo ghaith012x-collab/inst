@@ -101,7 +101,7 @@ def run_signup():
 
         # ─── GET CSRF TOKEN ───
         csrf_token = ""
-        for c in context.cookies():
+        for c in ctx.cookies():
             if c['name'] == 'csrftoken':
                 csrf_token = c['value']
                 break
