@@ -83,17 +83,26 @@ def get_email(page):
     for i in range(15):
         email = page.evaluate("""() => {
             const t = document.body.innerText;
-            const m = t.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+            // More specific: look for a proper email with a valid domain
+            const m = t.match(/(?<![a-zA-Z])[a-zA-Z]{3,}@[a-zA-Z][a-zA-Z0-9.-]+\.(com|net|org|info|io|co|in|me|app|dev|xyz|online|space)\b/);
             if (m) return m[0];
-            const els = document.querySelectorAll('span, div, p, input');
+            // Check input values/placeholders
+            const inputs = document.querySelectorAll('input');
+            for (const inp of inputs) {
+                const val = inp.value || inp.placeholder || '';
+                const m2 = val.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+                if (m2 && m2[0].length > 5) return m2[0];
+            }
+            // Check specific elements
+            const els = document.querySelectorAll('.address, .mailpanel, .genmail, [class*="address"], [class*="email"], [class*="mail"]');
             for (const el of els) {
-                const txt = el.textContent || el.value || el.placeholder || '';
+                const txt = el.textContent || '';
                 const m2 = txt.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
-                if (m2) return m2[0];
+                if (m2 && m2[0].length > 5) return m2[0];
             }
             return '';
         }""")
-        if email and '@' in email:
+        if email and '@' in email and len(email) > 8:
             log(f"Got: {email}")
             return email
         log(f"Wait... ({i+1}/15)")
