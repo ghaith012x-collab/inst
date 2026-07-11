@@ -111,34 +111,18 @@ def run_signup():
                 time.sleep(0.2); page.keyboard.press('Enter'); time.sleep(0.3)
         ss(page)
 
-        # SUBMIT VIA UI - first time
+        # CLICK SUBMIT
         log("Clicking Submit...")
         page.evaluate("""() => {
             const btns = document.querySelectorAll('[role="button"]');
             for (const b of btns) { if (b.textContent.includes('Submit')) { b.click(); return; } }
         }""")
-        time.sleep(10)
+        time.sleep(8)
         ss(page)
 
-        # Try to handle security dialog by clicking the checkbox
-        log("Looking for reCAPTCHA checkbox...")
-        for _ in range(15):
-            found = False
-            for i in range(page.locator('iframe').count()):
-                try:
-                    fr = page.locator('iframe').nth(i).content_frame()
-                    if fr:
-                        anchor = fr.locator('#recaptcha-anchor')
-                        if anchor.count() > 0:
-                            anchor.first.click(timeout=3000)
-                            time.sleep(2)
-                            if anchor.first.get_attribute('aria-checked') == 'true':
-                                log("reCAPTCHA checked!")
-                                found = True
-                                break
-                except: pass
-            if found: break
-            # Also try to click Next in the main dialog
+        # STEP 1: Click Next in security dialog to trigger reCAPTCHA
+        log("Clicking Next to trigger reCAPTCHA...")
+        for i in range(3):
             page.evaluate("""() => {
                 const btns = document.querySelectorAll('[role="button"]');
                 for (const b of btns) {
@@ -147,12 +131,47 @@ def run_signup():
                     }
                 }
             }""")
-            log("Clicked Next...")
             time.sleep(5)
             ss(page)
 
-        # Wait for any verification
-        log("Waiting for verification...")
+        # STEP 2: Scan for reCAPTCHA iframe
+        log("Scanning for reCAPTCHA iframe...")
+        captcha_found = False
+        for _ in range(20):
+            for i in range(page.locator('iframe').count()):
+                try:
+                    fr = page.locator('iframe').nth(i).content_frame()
+                    if fr:
+                        anchor = fr.locator('#recaptcha-anchor')
+                        if anchor.count() > 0:
+                            log("Found reCAPTCHA checkbox!")
+                            anchor.first.click(timeout=3000)
+                            time.sleep(2)
+                            checked = anchor.first.get_attribute('aria-checked')
+                            log(f"Checked: {checked}")
+                            captcha_found = True
+                            break
+                except: pass
+            if captcha_found: break
+            time.sleep(1)
+        
+        if captcha_found:
+            log("reCAPTCHA solved! Clicking Next...")
+            time.sleep(3)
+            page.evaluate("""() => {
+                const btns = document.querySelectorAll('[role="button"]');
+                for (const b of btns) {
+                    if (b.textContent.trim().toLowerCase() === 'next') {
+                        b.removeAttribute('aria-disabled'); b.click(); return;
+                    }
+                }
+            }""")
+            time.sleep(5)
+            ss(page)
+        else:
+            log("No reCAPTCHA found, continuing...")
+
+        # STEP 3: Final Next clicks
         for i in range(3):
             page.evaluate("""() => {
                 const btns = document.querySelectorAll('[role="button"]');
@@ -229,9 +248,9 @@ def stream():
         while True:
             with lock:
                 if latest_screenshot:
-                    yield (b'--frame\\r\\n'
-                           b'Content-Type: image/jpeg\\r\\n\\r\\n'
-                           + latest_screenshot + b'\\r\\n')
+                    yield (b'--frame\r\n'
+                           b'Content-Type: image/jpeg\r\n\r\n'
+                           + latest_screenshot + b'\r\n')
             time.sleep(1)
     return Response(gen(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
