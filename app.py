@@ -44,57 +44,44 @@ def run_signup():
         page.on("dialog", lambda d: d.dismiss())
         page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => false});Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});Object.defineProperty(navigator, 'languages', {get: () => ['en-US','en']});window.chrome = {runtime: {}};try { delete navigator.__proto__.webdriver; } catch(e) {}")
 
-        # 1. GET hi2.in EMAIL
+        # 1. Get hi2.in email - scroll to see the displayed email  
         log("Getting hi2.in email...")
-        email = None
-        for attempt in range(3):
-            page.goto('https://hi2.in/', timeout=30000, wait_until='domcontentloaded')
-            try: page.wait_for_load_state('networkidle', timeout=20000)
-            except: pass
-            time.sleep(5)
-            ss(page)
-            
-            # Click Generate
-            page.evaluate("""() => {
-                const all = document.querySelectorAll('button, div, span, a');
-                for (const el of all) {
-                    if (el.textContent.trim().toLowerCase() === 'generate' && el.offsetParent !== null) {
-                        el.click(); return;
-                    }
-                }
-            }""")
-            log(f"Generate clicked ({attempt+1}/3)")
-            time.sleep(5)
-            ss(page)
-            
-            # Try to extract email
-            for i in range(10):
-                email = page.evaluate("""() => {
-                    const t = document.body.innerText;
-                    const m = t.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
-                    if (m && m[0].length > 6 && m[0].includes('@')) return m[0];
-                    const inputs = document.querySelectorAll('input[type="text"], input[type="email"]');
-                    for (const inp of inputs) {
-                        const v = inp.value || inp.placeholder || '';
-                        if (v.includes('@')) {
-                            const m2 = v.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
-                            if (m2) return m2[0];
-                        }
-                    }
-                    return '';
-                }""")
-                if email and '@' in email and len(email) > 6:
-                    log(f"Email: {email}")
-                    break
-                time.sleep(1)
-            if email and '@' in email:
-                break
+        page.goto('https://hi2.in/', timeout=30000, wait_until='domcontentloaded')
+        try: page.wait_for_load_state('networkidle', timeout=20000)
+        except: pass
+        time.sleep(4)
+        ss(page)
         
+        page.evaluate("""() => {
+            const all = document.querySelectorAll('button, div, span, a');
+            for (const el of all) { if (el.textContent.trim().toLowerCase() === 'generate' && el.offsetParent !== null) { el.click(); return; } }
+        }""")
+        log("Clicked Generate")
+        time.sleep(5)
+        ss(page)
+        
+        email = ''
+        for i in range(15):
+            email = page.evaluate("""() => {
+                const t = document.body.innerText;
+                const m = t.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+                if (m && m[0].length > 6 && m[0].includes('@')) return m[0];
+                const el = document.querySelector('.mailpanel, .genmail, .cubold');
+                if (el) {
+                    const m2 = el.textContent.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+                    if (m2) return m2[0];
+                }
+                return '';
+            }""")
+            if email and '@' in email:
+                log(f"Email: {email}")
+                break
+            time.sleep(1)
         if not email or '@' not in email:
             email = f"{''.join(random.choices(string.ascii_lowercase, k=12))}@gmail.com"
             log(f"Gmail: {email}")
 
-        # 2. GEN CREDS
+        # 2. Gen creds
         fn = random.choice(['Alex','Jordan','Casey','Riley','Morgan','Taylor','Jamie','Avery','Quinn','Skyler','Drew','Reese'])
         ln = random.choice(['Smith','Jones','Brown','Davis','Lee','Cruz','Wang','Kim','Patel','Garcia','Miller','Wilson'])
         full = f"{fn} {ln}"
@@ -102,7 +89,7 @@ def run_signup():
         pwd = ''.join(random.choices(string.ascii_letters+string.digits+'!@#$', k=14))
         log(f"name={full} user={uname}")
 
-        # 3. INSTAGRAM
+        # 3. Instagram
         log("Loading Instagram...")
         page.goto('https://www.instagram.com/accounts/emailsignup/', timeout=30000, wait_until='domcontentloaded')
         try: page.wait_for_load_state('networkidle', timeout=15000)
@@ -158,7 +145,7 @@ def run_signup():
                 time.sleep(0.2); page.keyboard.press('Enter'); time.sleep(0.3)
         ss(page)
 
-        # 4. SUBMIT VIA API
+        # 4. Submit via API  
         log("Submitting via API...")
         t = int(time.time())
         ep = f"#PWD_INSTAGRAM_BROWSER:0:{t}:{pwd}"
@@ -184,54 +171,55 @@ def run_signup():
         account_created = '"account_created":true' in body_str
         needs_code = 'force_sign_up_code' in body_str
 
-        # 5. STORE CREDS REGARDLESS
+        # Save creds
         with lock:
             latest_credentials = {
-                'email': email,
-                'username': uname,
-                'password': pwd,
-                'full_name': full,
-                'status': 'success' if account_created else 'verification_needed',
-                'final_url': page.url[:120] if not needs_code else '',
+                'email': email, 'username': uname, 'password': pwd,
+                'full_name': full, 'status': 'success' if account_created else 'code_needed',
             }
-        log(f"Credentials saved! Status: {'SUCCESS' if account_created else 'needs verification'}")
 
-        # 6. IF CODE NEEDED, TRY TO GET IT
+        # 5. If code needed, go check hi2.in inbox
         code = None
         if needs_code:
-            log("Email verification required!")
+            log("Verification needed! Checking hi2.in inbox...")
             page.goto('https://hi2.in/', timeout=30000, wait_until='domcontentloaded')
             try: page.wait_for_load_state('networkidle', timeout=20000)
             except: pass
-            time.sleep(5)
+            time.sleep(3)
             
-            # Scroll to load inbox
-            page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)")
+            # Scroll to the mail panel area
+            page.evaluate("""() => {
+                const panels = document.querySelector('.mailpanel, .contentmail, .genmail');
+                if (panels) panels.scrollIntoView();
+                window.scrollTo(0, document.body.scrollHeight);
+            }""")
             time.sleep(2)
-            
-            # Check for verification code every 5 seconds for 60 seconds
+            ss(page)
+
             for check in range(12):
-                page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)")
+                page.evaluate("""() => {
+                    const el = document.querySelector('.mailpanel, .contentmail, .genmail');
+                    if (el) el.scrollIntoView();
+                    window.scrollTo(0, document.body.scrollHeight);
+                }""")
                 time.sleep(2)
                 txt = page.evaluate("() => document.body.innerText")
                 codes = re.findall(r'\b(\d{5,6})\b', txt)
                 if codes:
                     code = codes[0]
-                    log(f"CODE FOUND: {code}")
+                    log(f"FOUND CODE: {code}")
                     break
-                log(f"Inbox check ({check+1}/12)")
+                log(f"Check ({check+1}/12)")
                 page.reload(timeout=30000, wait_until='domcontentloaded')
                 time.sleep(3)
                 ss(page)
-            
+
             if code:
                 log(f"Submitting code: {code}")
                 page.goto('https://www.instagram.com/accounts/emailsignup/', timeout=30000, wait_until='domcontentloaded')
                 time.sleep(3)
                 ss(page)
-                
                 csrf2 = page.evaluate("() => (document.cookie.match(/csrftoken=([^;]+)/)||[])[1] || ''")
-                
                 cr = page.evaluate("""(args) => {
                     const [c, code] = args;
                     const fd = new URLSearchParams();
@@ -251,20 +239,18 @@ def run_signup():
                 time.sleep(5)
                 ss(page)
             else:
-                log("No code found in inbox")
+                log("No code found - account may need email verification")
 
-        # 7. FINAL
+        # 6. Final
         time.sleep(5); ss(page)
         cur = page.url
         log(f"Final: {cur[:120]}")
-
         with lock:
             latest_credentials.update({
                 'verification_code': code or '',
                 'final_url': cur[:120],
-                'status': 'success' if (account_created or '"account_created":true' in str(cur)) else latest_credentials.get('status', 'unknown'),
+                'status': 'success' if account_created else latest_credentials.get('status', 'code_needed'),
             })
-        
         log(f"Done: {uname} | success={account_created}")
         p.stop()
 
