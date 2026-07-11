@@ -35,66 +35,84 @@ def stealth(page):
     Object.defineProperty(navigator, 'hardwareConcurrency', {get: () => 8});
     """)
 
-def find_and_click_recaptcha(page):
-    """Search all iframes for reCAPTCHA checkbox and click it."""
-    for attempt in range(10):
-        iframes = page.locator('iframe')
-        cnt = iframes.count()
-        for i in range(cnt):
-            try:
-                src = (iframes.nth(i).get_attribute('src') or '').lower()
-                title = (iframes.nth(i).get_attribute('title') or '').lower()
-                if 'recaptcha' in src or 'recaptcha' in title or 'google.com/recaptcha' in src:
-                    log(f"  Found recaptcha iframe[{i}]")
-                    frame = iframes.nth(i).content_frame()
-                    if frame:
-                        anchor = frame.locator('#recaptcha-anchor')
-                        if anchor.count() > 0:
-                            anchor.first.click(timeout=5000)
-                            time.sleep(2)
-                            checked = anchor.first.get_attribute('aria-checked')
-                            if checked == 'true':
-                                log(f"  ✅ Checkbox checked!")
-                                return True
-            except: pass
-        time.sleep(1)
-    return False
-
-def get_hi2_email(page):
-    """Get temp email from hi2.in"""
+def get_email(page):
     page.goto('https://hi2.in/', timeout=30000, wait_until='domcontentloaded')
     try: page.wait_for_load_state('networkidle', timeout=20000)
     except: pass
     time.sleep(5)
     ss(page)
-    
-    # Click Generate
     page.evaluate("""() => {
         const all = document.querySelectorAll('button, div, span, a');
         for (const el of all) {
             const t = el.textContent.trim().toLowerCase();
-            if (t === 'generate' && el.offsetParent !== null) {
-                el.click(); return;
-            }
+            if (t === 'generate' && el.offsetParent !== null) { el.click(); return; }
         }
     }""")
     log("Clicked Generate")
     time.sleep(5)
     ss(page)
-    
-    # Extract email from page
-    for i in range(10):
+    for i in range(15):
         email = page.evaluate("""() => {
             const t = document.body.innerText;
             const m = t.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
-            return m ? m[0] : '';
+            if (m) return m[0];
+            const inputs = document.querySelectorAll('input[type="text"], input[type="email"], input[type="search"]');
+            for (const inp of inputs) {
+                if (inp.value && inp.value.includes('@')) return inp.value;
+                const p = inp.getAttribute('placeholder');
+                if (p && p.includes('@')) return p;
+            }
+            const spans = document.querySelectorAll('span, div, p');
+            for (const s of spans) {
+                const txt = s.textContent.trim();
+                if (txt.includes('@') && txt.includes('.')) {
+                    const m2 = txt.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+                    if (m2) return m2[0];
+                }
+            }
+            return '';
         }""")
         if email and '@' in email:
-            log(f"Got email: {email}")
+            log(f"Got: {email}")
             return email
-        log(f"Waiting... ({i+1}/10)")
+        log(f"Wait... ({i+1}/15)")
         time.sleep(1)
     return None
+
+def click_recaptcha(page):
+    for _ in range(15):
+        iframes = page.locator('iframe')
+        for i in range(iframes.count()):
+            try:
+                src = (iframes.nth(i).get_attribute('src') or '').lower()
+                title = (iframes.nth(i).get_attribute('title') or '').lower()
+                if 'recaptcha' in src or 'recaptcha' in title:
+                    log(f"  Found recaptcha iframe")
+                    frame = iframes.nth(i).content_frame()
+                    if frame:
+                        anchor = frame.locator('#recaptcha-anchor')
+                        if anchor.count() > 0 and anchor.first.is_visible():
+                            anchor.first.click(timeout=5000)
+                            time.sleep(2)
+                            if anchor.first.get_attribute('aria-checked') == 'true':
+                                log("  ✅ Checked!")
+                                return True
+            except: pass
+        time.sleep(1)
+    return False
+
+def click_next(page):
+    return page.evaluate("""() => {
+        const btns = document.querySelectorAll('[role="button"]');
+        for (const b of btns) {
+            const txt = b.textContent.trim().toLowerCase();
+            if (txt === 'next' || txt === 'verify') {
+                b.removeAttribute('aria-disabled');
+                b.click(); return true;
+            }
+        }
+        return false;
+    }""")
 
 def run_signup():
     global latest_screenshot, latest_credentials
@@ -102,7 +120,6 @@ def run_signup():
         from playwright.sync_api import sync_playwright
         p = sync_playwright().start()
         log("Starting browser...")
-
         browser = p.chromium.launch(
             proxy=None,
             args=['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage',
@@ -119,13 +136,11 @@ def run_signup():
         page.on("dialog", lambda d: d.dismiss())
         stealth(page)
 
-        # ===== GET EMAIL =====
-        email = get_hi2_email(page)
+        email = get_email(page)
         if not email:
             email = f"{''.join(random.choices(string.ascii_lowercase, k=12))}@gmail.com"
             log(f"Gmail: {email}")
 
-        # ===== INSTAGRAM SIGNUP =====
         fn = random.choice(['Alex','Jordan','Casey','Riley','Morgan','Taylor','Jamie','Avery','Quinn','Skyler','Drew','Reese'])
         ln = random.choice(['Smith','Jones','Brown','Davis','Lee','Cruz','Wang','Kim','Patel','Garcia','Miller','Wilson'])
         full = f"{fn} {ln}"
@@ -140,7 +155,6 @@ def run_signup():
         time.sleep(4)
         ss(page)
 
-        # Cookies
         for c in ["Allow all cookies","Accept All","Accept","Allow","I accept"]:
             try:
                 btn = page.get_by_role("button", name=c, exact=False)
@@ -179,7 +193,6 @@ def run_signup():
         time.sleep(0.8)
         ss(page)
 
-        # DOB
         yr = random.randint(1991, 2005); mo = random.randint(1, 12); dy = random.randint(1, 28 if mo == 2 else 30)
         mn = ['','January','February','March','April','May','June','July','August','September','October','November','December'][mo]
         log(f"DOB: {mn} {dy}, {yr}")
@@ -192,7 +205,7 @@ def run_signup():
                 time.sleep(0.2); page.keyboard.press('Enter'); time.sleep(0.3)
         ss(page)
 
-        # ===== SUBMIT =====
+        # Submit
         log("Clicking Submit...")
         page.evaluate("""() => {
             const btns = document.querySelectorAll('[role="button"]');
@@ -201,77 +214,50 @@ def run_signup():
         time.sleep(10)
         ss(page)
 
-        # ===== HANDLE SECURITY DIALOG =====
-        log("Handling security dialog...")
+        # Handle dialog + reCAPTCHA
+        log("Handling dialog...")
         for attempt in range(12):
             try:
-                has_dialog = page.evaluate("""() => {
+                has = page.evaluate("""() => {
                     const d = document.querySelector('[role="dialog"]');
-                    if (!d) return false;
-                    return true;
+                    return d ? true : false;
                 }""")
-                if not has_dialog:
-                    log("No dialog - submitted!")
+                if not has:
+                    log("Done! No dialog.")
                     break
-
-                log(f"Dialog present, checking for reCAPTCHA...")
                 
-                # Click the reCAPTCHA checkbox
-                found = find_and_click_recaptcha(page)
+                log(f"Dialog ({attempt+1})")
                 
-                if found:
-                    log("reCAPTCHA checked! Clicking Next...")
-                    page.evaluate("""() => {
-                        const btns = document.querySelectorAll('[role="button"]');
-                        for (const b of btns) {
-                            if (b.textContent.trim().toLowerCase() === 'next') {
-                                b.removeAttribute('aria-disabled');
-                                b.click(); return;
-                            }
-                        }
-                    }""")
+                # First try clicking the recaptcha checkbox
+                rc = click_recaptcha(page)
+                if rc:
+                    log("reCAPTCHA solved! Clicking Next...")
+                    click_next(page)
                     time.sleep(5)
                     ss(page)
-                    
-                    # Check if we need to solve image challenge
-                    has_dialog2 = page.evaluate("""() => {
+                    # Check if we need to click Next again (image challenge)
+                    has2 = page.evaluate("""() => {
                         const d = document.querySelector('[role="dialog"]');
                         return d ? true : false;
                     }""")
-                    if not has_dialog2:
-                        log("Done! Form submitted!")
+                    if not has2:
+                        log("Form submitted!")
                         break
                     else:
-                        log("Challenge page - trying Next...")
-                        page.evaluate("""() => {
-                            const btns = document.querySelectorAll('[role="button"]');
-                            for (const b of btns) {
-                                if (b.textContent.trim().toLowerCase() === 'next') {
-                                    b.removeAttribute('aria-disabled');
-                                    b.click(); return;
-                                }
-                            }
-                        }""")
+                        log("Second dialog - clicking Next...")
+                        click_next(page)
                         time.sleep(5)
                         ss(page)
                 else:
-                    log("No recaptcha iframe, clicking Next...")
-                    page.evaluate("""() => {
-                        const btns = document.querySelectorAll('[role="button"]');
-                        for (const b of btns) {
-                            if (b.textContent.trim().toLowerCase() === 'next') {
-                                b.removeAttribute('aria-disabled');
-                                b.click(); return;
-                            }
-                        }
-                    }""")
+                    log("No recaptcha, clicking Next anyway...")
+                    click_next(page)
                     time.sleep(5)
                     ss(page)
             except Exception as e:
-                log(f"Error: {e}")
+                log(f"Err: {e}")
                 break
 
-        # ===== USERNAME RETRY =====
+        # Username retry
         for r in range(5):
             try:
                 bt = page.locator('body').inner_text()
@@ -297,15 +283,14 @@ def run_signup():
             }""")
             time.sleep(8); ss(page)
 
-        # ===== FINAL =====
         time.sleep(5); ss(page)
         cur = page.url
-        log(f"Final URL: {cur[:120]}")
+        log(f"Final: {cur[:120]}")
 
         ok = False
         try:
             bt = page.locator('body').inner_text()
-            for kw in ["welcome","let's go","start exploring","logged in","find people","save your login","you're logged in","signed in"]:
+            for kw in ["welcome","let's go","start exploring","logged in","find people","save your login"]:
                 if kw.lower() in bt.lower(): ok = True; log("SUCCESS!"); break
         except: pass
         if "emailsignup" not in cur and "signup" not in cur: ok = True; log("Navigated away!")
@@ -326,7 +311,6 @@ def run_signup():
         with lock:
             latest_credentials = {'error': str(e)}
 
-# FLASK
 @app.route('/')
 def index():
     return render_template('dashboard.html')
