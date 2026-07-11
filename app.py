@@ -22,7 +22,7 @@ def ss(page):
         except: pass
 
 def apply_stealth(page):
-    page.add_init_script("""   
+    page.add_init_script("""
     Object.defineProperty(navigator, 'webdriver', {get: () => false});
     Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
     Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
@@ -32,9 +32,9 @@ def apply_stealth(page):
         p.name === 'notifications' ? Promise.resolve({state: Notification.permission}) : origQuery(p)
     );
     try { delete navigator.__proto__.webdriver; } catch(e) {}
+    Object.defineProperty(navigator, 'hardwareConcurrency', {get: () => 8});
     """)
 
-# ─── MAIL.TM ───
 def create_mail():
     try:
         r = requests.get("https://api.mail.tm/domains", timeout=10)
@@ -54,7 +54,7 @@ def create_mail():
     except: pass
     return None, None, None
 
-def check_mail(token, timeout=80):
+def check_mail(token, timeout=90):
     start = time.time()
     headers = {"Authorization": f"Bearer {token}"}
     while time.time() - start < timeout:
@@ -109,29 +109,30 @@ def run_signup():
         page.on("dialog", lambda d: d.dismiss())
         apply_stealth(page)
 
-        # ─── CREATE TEMP EMAIL ───
+        # Create temp email
         log("📧 Creating temp email...")
         email, mail_token, _ = create_mail()
         if not email:
             email = f"{''.join(random.choices(string.ascii_lowercase, k=15))}@gmail.com"
             log(f"  Using gmail: {email}")
 
-        # ─── GEN CREDS ───
+        # GEN CREDS
         fn = random.choice(['Alex','Jordan','Casey','Riley','Morgan','Taylor','Jamie','Avery','Quinn','Skyler','Drew','Reese'])
         ln = random.choice(['Smith','Jones','Brown','Davis','Lee','Cruz','Wang','Kim','Patel','Garcia','Miller','Wilson'])
         full_name = f"{fn} {ln}"
-        uname = f"{full_name.replace(' ','').lower()}{random.randint(100,99999)}"
+        uname = f"{fn.lower()}{ln.lower()}{random.randint(100,99999)}"
         pwd = ''.join(random.choices(string.ascii_letters+string.digits+'!@#$', k=14))
         log(f"📋 name={full_name} user={uname} email={email}")
 
-        # ─── LOAD ───
-        log("── Loading Instagram signup ──")
+        # LOAD PAGE
+        log("── Loading Instagram ──")
         page.goto('https://www.instagram.com/accounts/emailsignup/', timeout=30000, wait_until='domcontentloaded')
         try: page.wait_for_load_state('networkidle', timeout=15000)
         except: pass
         time.sleep(3)
         ss(page)
 
+        # Accept cookies
         for text in ["Allow all cookies","Accept All","Accept","Allow","I accept"]:
             try:
                 btn = page.get_by_role("button", name=text, exact=False)
@@ -141,10 +142,11 @@ def run_signup():
         time.sleep(2)
         ss(page)
 
+        # Get CSRF
         csrf = page.evaluate("() => (document.cookie.match(/csrftoken=([^;]+)/)||[])[1] || ''")
         log(f"  🔑 CSRF: {csrf[:20]}...")
 
-        # ─── FILL ───
+        # FILL FIELDS
         inputs = page.locator('input:visible')
         ic = inputs.count()
         log(f"  🔍 {ic} visible inputs")
@@ -177,7 +179,7 @@ def run_signup():
         time.sleep(random.uniform(0.5,1.2))
         ss(page)
 
-        # ─── DOB ───
+        # DOB
         dy = random.randint(1991, 2005)
         dm = random.randint(1, 12)
         dd = random.randint(1, 28 if dm == 2 else 30)
@@ -195,7 +197,7 @@ def run_signup():
                 log(f"  ✅ {label.split()[1]}: {val}")
         ss(page)
 
-        # ─── SUBMIT VIA API ───
+        # SUBMIT VIA API
         log("── Submitting via API ──")
         ts2 = int(time.time())
         enc_pwd = f"#PWD_INSTAGRAM_BROWSER:0:{ts2}:{pwd}"
@@ -228,37 +230,50 @@ def run_signup():
         else:
             log(f"    body: {str(result['body'])[:200]}")
 
-        # ─── HANDLE VERIFICATION CODE ───
-        code = None
-        if not account_created and mail_token and isinstance(result['body'], dict):
-            if 'force_sign_up_code' in str(result['body'].get('errors', {})):
-                log("  🔐 Code required! Waiting for email...")
-                code = check_mail(mail_token, timeout=60)
-        
-        if code:
-            log(f"  🔑 Submitting code: {code}")
-            cres = page.evaluate("""(args) => {
-                const [csrf, code] = args;
-                const fd = new URLSearchParams();
-                fd.append('code', code); fd.append('device_id', '');
-                return fetch('/api/v1/web/accounts/web_create_ajax/confirm_code/', {
+        # Try resend code API
+        if not account_created and mail_token:
+            log("  🔐 Trying to resend verification code...")
+            resend = page.evaluate("""(args) => {
+                const [csrf] = args;
+                return fetch('/api/v1/web/accounts/web_create_ajax/resend_code/', {
                     method: 'POST',
                     headers: {'X-CSRFToken': csrf, 'X-Instagram-AJAX': '1', 'Content-Type': 'application/x-www-form-urlencoded'},
-                    body: fd, credentials: 'same-origin',
+                    body: new URLSearchParams(),
+                    credentials: 'same-origin',
                 }).then(r => r.json().then(b => ({status: r.status, body: b})).catch(() =>
                     r.text().then(t => ({status: r.status, body: t}))
                 ));
-            }""", [csrf, code])
-            log(f"  📡 Code result: {cres['status']} - {str(cres['body'])[:200]}")
-            if isinstance(cres['body'], dict) and cres['body'].get('account_created'):
-                account_created = True
-                log("✅ ACCOUNT CONFIRMED!")
-            time.sleep(5)
-            ss(page)
+            }""", [csrf])
+            log(f"    resend: {resend['status']} - {str(resend['body'])[:150]}")
+            
+            # Wait for mail
+            log("  📧 Waiting for verification email...")
+            code = check_mail(mail_token, timeout=60)
+            
+            if code:
+                log(f"  🔑 Submitting code: {code}")
+                cres = page.evaluate("""(args) => {
+                    const [csrf, code] = args;
+                    const fd = new URLSearchParams();
+                    fd.append('code', code); fd.append('device_id', '');
+                    return fetch('/api/v1/web/accounts/web_create_ajax/confirm_code/', {
+                        method: 'POST',
+                        headers: {'X-CSRFToken': csrf, 'X-Instagram-AJAX': '1', 'Content-Type': 'application/x-www-form-urlencoded'},
+                        body: fd, credentials: 'same-origin',
+                    }).then(r => r.json().then(b => ({status: r.status, body: b})).catch(() =>
+                        r.text().then(t => ({status: r.status, body: t}))
+                    ));
+                }""", [csrf, code])
+                log(f"    code result: {cres['status']} - {str(cres['body'])[:200]}")
+                if isinstance(cres['body'], dict) and cres['body'].get('account_created'):
+                    account_created = True
+                    log("✅ ACCOUNT CONFIRMED!")
+                time.sleep(5)
+                ss(page)
 
-        # ─── UI FALLBACK ───
+        # UI fallback
         if not account_created:
-            log("── UI Submit fallback ──")
+            log("── UI Submit ──")
             page.evaluate("""() => {
                 const btns = document.querySelectorAll('[role="button"]');
                 for (const btn of btns) {
@@ -267,32 +282,14 @@ def run_signup():
             }""")
             time.sleep(8)
             ss(page)
-            
-            # Check for verification and try bypass
-            try:
-                bt = page.locator('body').inner_text()
-                if "confirm it's you" in bt.lower() or "help us confirm" in bt.lower():
-                    log("  🔒 Verification challenge!")
-                    page.evaluate("""() => {
-                        const btns = document.querySelectorAll('[role="button"]');
-                        for (const btn of btns) {
-                            if (btn.textContent.includes('Next')) {
-                                btn.removeAttribute('aria-disabled');
-                                btn.click(); return;
-                            }
-                        }
-                    }""")
-                    time.sleep(5)
-                    ss(page)
-            except: pass
 
-        # ─── USERNAME RETRY ───
+        # Username retry
         for retry in range(5):
             try:
                 bt = page.locator('body').inner_text()
                 if "not available" not in bt and "already taken" not in bt: break
             except: pass
-            uname = f"{full_name.replace(' ','').lower()}{random.randint(100,99999)}"
+            uname = f"{fn.lower()}{ln.lower()}{random.randint(100,99999)}"
             log(f"  ⚠️ Username taken! New: {uname}")
             page.evaluate("""(nu) => {
                 const inputs = document.querySelectorAll('input');
@@ -312,13 +309,13 @@ def run_signup():
             }""")
             time.sleep(8); ss(page)
 
-        # ─── FINAL ───
+        # FINAL
         time.sleep(5)
         ss(page)
         cur = page.url
         log(f"📄 Final URL: {cur[:120]}")
 
-        is_ok = account_created or False
+        is_ok = account_created
         try:
             bt = page.locator('body').inner_text()
             for kw in ["welcome","let's go","start exploring","logged in","find people","save your login","you're logged in","signed in"]:
@@ -326,11 +323,12 @@ def run_signup():
         except: pass
         if "emailsignup" not in cur and "signup" not in cur: is_ok = True; log("✅ Navigated away!")
 
+        # Success if account_created from API OR if we got past signup page
         with lock:
             latest_credentials = {
                 'email': email, 'username': uname, 'password': pwd,
-                'full_name': full_name, 'status': 'success' if is_ok else 'completed',
-                'verification_code': code or '',
+                'full_name': full_name, 
+                'status': 'success' if is_ok else 'submitted',
                 'final_url': cur[:120],
             }
         log(f"🏁 Done: {uname} | success={is_ok}")
@@ -343,7 +341,7 @@ def run_signup():
         with lock:
             latest_credentials = {'error': str(e)}
 
-# ─── FLASK ───
+# FLASK ROUTES
 @app.route('/')
 def index():
     return render_template('dashboard.html')
