@@ -44,52 +44,65 @@ def run_signup():
         page.on("dialog", lambda d: d.dismiss())
         page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => false});Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});Object.defineProperty(navigator, 'languages', {get: () => ['en-US','en']});window.chrome = {runtime: {}};try { delete navigator.__proto__.webdriver; } catch(e) {}")
 
-        # STEP 1: Get hi2.in email in same session
+        # 1. GET hi2.in EMAIL
         log("Getting hi2.in email...")
-        page.goto('https://hi2.in/', timeout=30000, wait_until='domcontentloaded')
-        try: page.wait_for_load_state('networkidle', timeout=15000)
-        except: pass
-        time.sleep(4)
-        ss(page)
-
-        page.evaluate("""() => {
-            const all = document.querySelectorAll('button, div, span, a');
-            for (const el of all) {
-                if (el.textContent.trim().toLowerCase() === 'generate' && el.offsetParent !== null) {
-                    el.click(); return;
+        email = None
+        for attempt in range(3):
+            page.goto('https://hi2.in/', timeout=30000, wait_until='domcontentloaded')
+            try: page.wait_for_load_state('networkidle', timeout=20000)
+            except: pass
+            time.sleep(5)
+            ss(page)
+            
+            # Click Generate
+            page.evaluate("""() => {
+                const all = document.querySelectorAll('button, div, span, a');
+                for (const el of all) {
+                    if (el.textContent.trim().toLowerCase() === 'generate' && el.offsetParent !== null) {
+                        el.click(); return;
+                    }
                 }
-            }
-        }""")
-
-        log("Clicked Generate")
-        time.sleep(5)
-        ss(page)
-
-        email = ''
-        for i in range(15):
-            email = page.evaluate("""() => {
-                const t = document.body.innerText;
-                const m = t.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}/);
-                if (m && m[0].length > 6 && m[0].includes('@') && !m[0].includes('random@')) return m[0];
-                return '';
             }""")
+            log(f"Generate clicked ({attempt+1}/3)")
+            time.sleep(5)
+            ss(page)
+            
+            # Try to extract email
+            for i in range(10):
+                email = page.evaluate("""() => {
+                    const t = document.body.innerText;
+                    const m = t.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+                    if (m && m[0].length > 6 && m[0].includes('@')) return m[0];
+                    const inputs = document.querySelectorAll('input[type="text"], input[type="email"]');
+                    for (const inp of inputs) {
+                        const v = inp.value || inp.placeholder || '';
+                        if (v.includes('@')) {
+                            const m2 = v.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+                            if (m2) return m2[0];
+                        }
+                    }
+                    return '';
+                }""")
+                if email and '@' in email and len(email) > 6:
+                    log(f"Email: {email}")
+                    break
+                time.sleep(1)
             if email and '@' in email:
-                log(f"Got: {email}")
                 break
-            time.sleep(1)
-
-        if not email:
+        
+        if not email or '@' not in email:
             email = f"{''.join(random.choices(string.ascii_lowercase, k=12))}@gmail.com"
+            log(f"Gmail: {email}")
 
-        # STEP 2: Gen creds
+        # 2. GEN CREDS
         fn = random.choice(['Alex','Jordan','Casey','Riley','Morgan','Taylor','Jamie','Avery','Quinn','Skyler','Drew','Reese'])
         ln = random.choice(['Smith','Jones','Brown','Davis','Lee','Cruz','Wang','Kim','Patel','Garcia','Miller','Wilson'])
         full = f"{fn} {ln}"
         uname = f"{fn.lower()}{ln.lower()}{random.randint(1000,99999)}"
         pwd = ''.join(random.choices(string.ascii_letters+string.digits+'!@#$', k=14))
-        log(f"name={full} user={uname} email={email}")
+        log(f"name={full} user={uname}")
 
-        # STEP 3: Instagram
+        # 3. INSTAGRAM
         log("Loading Instagram...")
         page.goto('https://www.instagram.com/accounts/emailsignup/', timeout=30000, wait_until='domcontentloaded')
         try: page.wait_for_load_state('networkidle', timeout=15000)
@@ -145,7 +158,7 @@ def run_signup():
                 time.sleep(0.2); page.keyboard.press('Enter'); time.sleep(0.3)
         ss(page)
 
-        # STEP 4: Submit via API
+        # 4. SUBMIT VIA API
         log("Submitting via API...")
         t = int(time.time())
         ep = f"#PWD_INSTAGRAM_BROWSER:0:{t}:{pwd}"
@@ -171,58 +184,54 @@ def run_signup():
         account_created = '"account_created":true' in body_str
         needs_code = 'force_sign_up_code' in body_str
 
-        # STEP 5: Handle verification + check hi2.in inbox
+        # 5. STORE CREDS REGARDLESS
+        with lock:
+            latest_credentials = {
+                'email': email,
+                'username': uname,
+                'password': pwd,
+                'full_name': full,
+                'status': 'success' if account_created else 'verification_needed',
+                'final_url': page.url[:120] if not needs_code else '',
+            }
+        log(f"Credentials saved! Status: {'SUCCESS' if account_created else 'needs verification'}")
+
+        # 6. IF CODE NEEDED, TRY TO GET IT
         code = None
         if needs_code:
-            log("Verification needed! Clicking Submit via UI to trigger email...")
-            page.evaluate("""() => {
-                const btns = document.querySelectorAll('[role="button"]');
-                for (const b of btns) { if (b.textContent.includes('Submit')) { b.click(); return; } }
-            }""")
-            time.sleep(5)
-            ss(page)
-
-            # Click Next through security dialogs 
-            for i in range(8):
-                page.evaluate("""() => {
-                    const btns = document.querySelectorAll('[role="button"]');
-                    for (const b of btns) {
-                        if (b.textContent.trim().toLowerCase() === 'next') {
-                            b.removeAttribute('aria-disabled'); b.click(); return;
-                        }
-                    }
-                }""")
-                time.sleep(5)
-                ss(page)
-
-            # Now check hi2.in inbox - navigate there
-            log("Checking hi2.in inbox for code...")
+            log("Email verification required!")
             page.goto('https://hi2.in/', timeout=30000, wait_until='domcontentloaded')
-            time.sleep(3)
+            try: page.wait_for_load_state('networkidle', timeout=20000)
+            except: pass
+            time.sleep(5)
+            
+            # Scroll to load inbox
             page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)")
             time.sleep(2)
-            ss(page)
-
-            for loop in range(12):
+            
+            # Check for verification code every 5 seconds for 60 seconds
+            for check in range(12):
+                page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)")
+                time.sleep(2)
                 txt = page.evaluate("() => document.body.innerText")
-                codes = re.findall(r'\\b(\\d{5,6})\\b', txt)
+                codes = re.findall(r'\b(\d{5,6})\b', txt)
                 if codes:
                     code = codes[0]
                     log(f"CODE FOUND: {code}")
                     break
-                log(f"Check ({loop+1}/12)")
+                log(f"Inbox check ({check+1}/12)")
                 page.reload(timeout=30000, wait_until='domcontentloaded')
                 time.sleep(3)
-                page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)")
-                time.sleep(2)
                 ss(page)
-
+            
             if code:
-                # Go back to Instagram and submit code
+                log(f"Submitting code: {code}")
                 page.goto('https://www.instagram.com/accounts/emailsignup/', timeout=30000, wait_until='domcontentloaded')
                 time.sleep(3)
                 ss(page)
-
+                
+                csrf2 = page.evaluate("() => (document.cookie.match(/csrftoken=([^;]+)/)||[])[1] || ''")
+                
                 cr = page.evaluate("""(args) => {
                     const [c, code] = args;
                     const fd = new URLSearchParams();
@@ -232,60 +241,31 @@ def run_signup():
                         headers:{'X-CSRFToken':c, 'X-Instagram-AJAX':'1', 'Content-Type':'application/x-www-form-urlencoded'},
                         body:fd,
                     }).then(r => r.text().then(t => ({status:r.status, body:t})));
-                }""", [csrf, code])
+                }""", [csrf2, code])
                 log(f"Code API: {cr['status']} - {str(cr['body'])[:200]}")
                 if '"account_created":true' in str(cr['body']):
                     account_created = True
                     log("ACCOUNT CREATED!")
-                time.sleep(3)
+                    with lock:
+                        latest_credentials['status'] = 'success'
+                time.sleep(5)
+                ss(page)
+            else:
+                log("No code found in inbox")
 
-        # STEP 6: Username retry
-        if not account_created:
-            for r in range(5):
-                try:
-                    bt = page.locator('body').inner_text()
-                    if "not available" not in bt and "already taken" not in bt: break
-                except: pass
-                uname = f"{fn.lower()}{ln.lower()}{random.randint(1000,99999)}"
-                log(f"Username taken! New: {uname}")
-                page.evaluate("""(nu) => {
-                    const inputs = document.querySelectorAll('input');
-                    for (const inp of inputs) {
-                        if (inp.type === 'search' || inp.getAttribute('aria-label') === 'Username') {
-                            inp.disabled = false;
-                            const s = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-                            s.call(inp, nu); inp.dispatchEvent(new Event('input', {bubbles:true}));
-                            inp.dispatchEvent(new Event('change', {bubbles:true})); break;
-                        }
-                    }
-                }""", uname)
-                time.sleep(1)
-                page.evaluate("""() => {
-                    const btns = document.querySelectorAll('[role="button"]');
-                    for (const b of btns) { if (b.textContent.includes('Submit')) { b.click(); return; } }
-                }""")
-                time.sleep(8); ss(page)
-
+        # 7. FINAL
         time.sleep(5); ss(page)
         cur = page.url
         log(f"Final: {cur[:120]}")
 
-        ok = account_created
-        try:
-            bt = page.locator('body').inner_text()
-            for kw in ["welcome","let's go","start exploring","logged in","find people","save your login"]:
-                if kw.lower() in bt.lower(): ok = True; log("SUCCESS!"); break
-        except: pass
-        if "emailsignup" not in cur and "signup" not in cur: ok = True; log("Navigated away!")
-
         with lock:
-            latest_credentials = {
-                'email': email, 'username': uname, 'password': pwd,
-                'full_name': full, 'status': 'success' if ok else 'needs_verification',
+            latest_credentials.update({
                 'verification_code': code or '',
                 'final_url': cur[:120],
-            }
-        log(f"Done: {uname} | success={ok}")
+                'status': 'success' if (account_created or '"account_created":true' in str(cur)) else latest_credentials.get('status', 'unknown'),
+            })
+        
+        log(f"Done: {uname} | success={account_created}")
         p.stop()
 
     except Exception as e:
@@ -317,7 +297,7 @@ def status():
 
 @app.route('/create', methods=['POST'])
 def create():
-    with lock: status_log.clear()
+    with lock: status_log.clear(); latest_credentials = {}
     threading.Thread(target=run_signup, daemon=True).start()
     return jsonify({'status': 'started'})
 
