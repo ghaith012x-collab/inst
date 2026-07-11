@@ -66,26 +66,38 @@ def run_signup():
         time.sleep(4)
         ss(page)
 
-        # Click Generate button
+        # Click Generate - it's the first button with "Generate" text
         page.evaluate("""() => {
-            const all = document.querySelectorAll('button, div, span, a');
+            const all = document.querySelectorAll('button, div, span, a, .genmail, .submit');
             for (const el of all) {
-                if (el.textContent.trim() === 'Generate' && el.offsetParent !== null) {
-                    el.click(); return;
+                const t = el.textContent.trim().toLowerCase();
+                if ((t === 'generate' || t.includes('generate')) && el.offsetParent !== null) {
+                    el.click();
+                    return 'clicked';
                 }
             }
+            return 'not found';
         }""")
         log("Clicked Generate")
-        time.sleep(4)
+        time.sleep(5)
         ss(page)
 
-        # Extract email address
+        # Extract email from page - look for it in the address area
         email = ""
         for i in range(10):
+            # Try to find email in common patterns
             email = page.evaluate("""() => {
                 const t = document.body.innerText;
+                // Look for email pattern
                 const m = t.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}/);
-                return m ? m[0] : '';
+                if (m) return m[0];
+                // Look specifically in address areas
+                const addr = document.querySelector('.address, .mailpanel, .cubold, [class*="address"], [class*="email"]');
+                if (addr) {
+                    const a = addr.innerText.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}/);
+                    if (a) return a[0];
+                }
+                return '';
             }""")
             if email and '@' in email:
                 log(f"Got email: {email}")
@@ -195,38 +207,71 @@ def run_signup():
         time.sleep(6)
         ss(page)
 
-        # ============ STEP 4: CHECK hi2.in FOR CODE ============
+        # ============ STEP 4: CHECK hi2.in FOR VERIFICATION CODE ============
         log("Checking hi2.in inbox...")
         code = None
 
         page.goto('https://hi2.in/', timeout=30000, wait_until='domcontentloaded')
         time.sleep(3)
+
+        # Scroll down to see the inbox area
+        page.evaluate("""() => {
+            window.scrollTo(0, document.body.scrollHeight);
+            // Also try to scroll to the mail panel
+            const mp = document.querySelector('.mailpanel, .contentmail, .address-list, .genmail, [class*="mail"], [class*="inbox"]');
+            if (mp) mp.scrollIntoView();
+        }""")
+        time.sleep(2)
         ss(page)
 
         for attempt in range(15):
             try:
+                # Scroll down each time to trigger lazy loading
+                page.evaluate("""() => {
+                    window.scrollTo(0, document.body.scrollHeight);
+                    // Click "More" button if present
+                    const more = document.querySelector('.more, .morebtn, [class*="more"]');
+                    if (more && more.offsetParent !== null) more.click();
+                }""")
+                time.sleep(1)
+                
                 txt = page.evaluate("() => document.body.innerText")
+                log(f"Check ({attempt+1}/15)")
+                
+                # Look for Instagram verification codes
+                if 'Instagram' in txt or 'insta' in txt.lower() or 'code' in txt.lower():
+                    codes = re.findall(r'\b(\d{5,6})\b', txt)
+                    if codes:
+                        code = codes[0]
+                        log(f"Found code: {code}")
+                        break
+                
+                # Also check for any 5-6 digit codes
                 codes = re.findall(r'\b(\d{5,6})\b', txt)
                 if codes:
                     code = codes[0]
                     log(f"Found code: {code}")
                     break
-                log(f"Check ({attempt+1}/15)")
+                    
                 page.reload(timeout=30000, wait_until='domcontentloaded')
                 time.sleep(3)
+                # Scroll down after reload
+                page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)")
+                time.sleep(1)
                 ss(page)
             except: time.sleep(5)
 
         if not code:
-            log("No code found")
+            log("No code found on hi2.in")
 
-        # ============ STEP 5: ENTER CODE ============
+        # ============ STEP 5: ENTER CODE ON INSTAGRAM ============
         if code:
             log(f"Entering code: {code}")
             page.goto('https://www.instagram.com/accounts/emailsignup/', timeout=30000, wait_until='domcontentloaded')
             time.sleep(3)
             ss(page)
 
+            # Try via API
             cr = page.evaluate("""(args) => {
                 const [c, code] = args;
                 const fd = new URLSearchParams();
@@ -237,14 +282,14 @@ def run_signup():
                     body:fd,
                 }).then(r => r.text().then(t => ({status:r.status, body:t})));
             }""", [csrf, code])
-            log(f"Code API: {cr['status']} - {str(cr['body'])[:200]}")
+            log(f"Code: {cr['status']} - {str(cr['body'])[:200]}")
             if '"account_created":true' in str(cr['body']):
                 acc_ok = True
                 log("ACCOUNT CREATED!")
             time.sleep(3)
             ss(page)
 
-        # ============ STEP 6: HANDLE DIALOG ============
+        # ============ STEP 6: HANDLE VERIFICATION DIALOG ============
         if not acc_ok:
             for a in range(6):
                 try:
