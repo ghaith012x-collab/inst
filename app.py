@@ -383,12 +383,23 @@ def run_signup():
             log("  ⚠️ Username issue detected! Generating new username...")
             username = f"{full_name.replace(' ','').lower()}{random.randint(100, 99999)}"
             log(f"  🔄 New username: {username}")
-            # Try to fill the username field again
-            for i in range(page.locator('input:visible').count()):
-                if page.locator('input:visible').nth(i).get_attribute('type') == 'search':
-                    type_slow(page.locator('input:visible').nth(i), username)
-                    log(f"  ✅ Re-filled username: {username}")
-                    break
+            # Use JavaScript to re-enable and fill the username field
+            page.evaluate("""(newUsername) => {
+                    const inputs = document.querySelectorAll('input');
+                    for (const inp of inputs) {
+                        if (inp.type === 'search' || inp.getAttribute('aria-label') === 'Username') {
+                            inp.disabled = false;
+                            const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+                                window.HTMLInputElement.prototype, 'value'
+                            ).set;
+                            nativeInputValueSetter.call(inp, newUsername);
+                            inp.dispatchEvent(new Event('input', { bubbles: true }));
+                            inp.dispatchEvent(new Event('change', { bubbles: true }));
+                            break;
+                        }
+                    }
+                }""", username)
+            log(f"  ✅ JS-set username: {username}")
             human_delay()
             click_button_by_text(page, ["Submit", "Sign up", "Sign Up"], "Submit (retry)")
             time.sleep(5)
