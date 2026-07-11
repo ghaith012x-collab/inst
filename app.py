@@ -22,18 +22,47 @@ def ss(page):
         except: pass
 
 def stealth(page):
-    page.add_init_script("""
-    Object.defineProperty(navigator, 'webdriver', {get: () => false});
-    Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});
-    Object.defineProperty(navigator, 'languages', {get: () => ['en-US','en']});
-    window.chrome = {runtime: {}};
-    const origQuery = window.navigator.permissions.query;
-    window.navigator.permissions.query = (p) => (
-        p.name === 'notifications' ? Promise.resolve({state: 'prompt'}) : origQuery(p)
-    );
-    try { delete navigator.__proto__.webdriver; } catch(e) {}
-    Object.defineProperty(navigator, 'hardwareConcurrency', {get: () => 8});
-    """)
+    page.add_init_script("""Object.defineProperty(navigator, 'webdriver', {get: () => false});Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});Object.defineProperty(navigator, 'languages', {get: () => ['en-US','en']});window.chrome = {runtime: {}};const origQuery = window.navigator.permissions.query;window.navigator.permissions.query = (p) => (p.name === 'notifications' ? Promise.resolve({state: 'prompt'}) : origQuery(p));try { delete navigator.__proto__.webdriver; } catch(e) {}Object.defineProperty(navigator, 'hardwareConcurrency', {get: () => 8});""")
+
+def has_dialog(page):
+    return page.evaluate("""() => { const d = document.querySelector('[role="dialog"]'); return d ? true : false; }""")
+
+def click_next_btn(page):
+    return page.evaluate("""() => {
+        const btns = document.querySelectorAll('[role="button"]');
+        for (const b of btns) {
+            const txt = b.textContent.trim().toLowerCase();
+            if (txt === 'next') {
+                b.removeAttribute('aria-disabled');
+                b.click(); return true;
+            }
+        }
+        return false;
+    }""")
+
+def click_recaptcha_box(page):
+    """Find the reCAPTCHA iframe and click the checkbox inside it."""
+    for _ in range(20):
+        iframes = page.locator('iframe')
+        for i in range(iframes.count()):
+            try:
+                src = (iframes.nth(i).get_attribute('src') or '').lower()
+                title = (iframes.nth(i).get_attribute('title') or '').lower()
+                if 'recaptcha' in src or 'recaptcha' in title:
+                    frame = iframes.nth(i).content_frame()
+                    if frame:
+                        anchor = frame.locator('#recaptcha-anchor')
+                        if anchor.count() > 0:
+                            log("  Found recaptcha box, clicking...")
+                            anchor.first.click(timeout=5000)
+                            time.sleep(2)
+                            checked = anchor.first.get_attribute('aria-checked')
+                            if checked == 'true':
+                                log("  ✅ Checkbox checked!")
+                                return True
+            except: pass
+        time.sleep(1)
+    return False
 
 def get_email(page):
     page.goto('https://hi2.in/', timeout=30000, wait_until='domcontentloaded')
@@ -56,19 +85,11 @@ def get_email(page):
             const t = document.body.innerText;
             const m = t.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
             if (m) return m[0];
-            const inputs = document.querySelectorAll('input[type="text"], input[type="email"], input[type="search"]');
-            for (const inp of inputs) {
-                if (inp.value && inp.value.includes('@')) return inp.value;
-                const p = inp.getAttribute('placeholder');
-                if (p && p.includes('@')) return p;
-            }
-            const spans = document.querySelectorAll('span, div, p');
-            for (const s of spans) {
-                const txt = s.textContent.trim();
-                if (txt.includes('@') && txt.includes('.')) {
-                    const m2 = txt.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
-                    if (m2) return m2[0];
-                }
+            const els = document.querySelectorAll('span, div, p, input');
+            for (const el of els) {
+                const txt = el.textContent || el.value || el.placeholder || '';
+                const m2 = txt.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+                if (m2) return m2[0];
             }
             return '';
         }""")
@@ -78,41 +99,6 @@ def get_email(page):
         log(f"Wait... ({i+1}/15)")
         time.sleep(1)
     return None
-
-def click_recaptcha(page):
-    for _ in range(15):
-        iframes = page.locator('iframe')
-        for i in range(iframes.count()):
-            try:
-                src = (iframes.nth(i).get_attribute('src') or '').lower()
-                title = (iframes.nth(i).get_attribute('title') or '').lower()
-                if 'recaptcha' in src or 'recaptcha' in title:
-                    log(f"  Found recaptcha iframe")
-                    frame = iframes.nth(i).content_frame()
-                    if frame:
-                        anchor = frame.locator('#recaptcha-anchor')
-                        if anchor.count() > 0 and anchor.first.is_visible():
-                            anchor.first.click(timeout=5000)
-                            time.sleep(2)
-                            if anchor.first.get_attribute('aria-checked') == 'true':
-                                log("  ✅ Checked!")
-                                return True
-            except: pass
-        time.sleep(1)
-    return False
-
-def click_next(page):
-    return page.evaluate("""() => {
-        const btns = document.querySelectorAll('[role="button"]');
-        for (const b of btns) {
-            const txt = b.textContent.trim().toLowerCase();
-            if (txt === 'next' || txt === 'verify') {
-                b.removeAttribute('aria-disabled');
-                b.click(); return true;
-            }
-        }
-        return false;
-    }""")
 
 def run_signup():
     global latest_screenshot, latest_credentials
@@ -205,7 +191,7 @@ def run_signup():
                 time.sleep(0.2); page.keyboard.press('Enter'); time.sleep(0.3)
         ss(page)
 
-        # Submit
+        # SUBMIT
         log("Clicking Submit...")
         page.evaluate("""() => {
             const btns = document.querySelectorAll('[role="button"]');
@@ -214,49 +200,38 @@ def run_signup():
         time.sleep(10)
         ss(page)
 
-        # Handle dialog + reCAPTCHA
-        log("Handling dialog...")
-        # FIRST: Click Next to get past the "Help us confirm it's you" screen
-        # This triggers the reCAPTCHA to load
-        for attempt in range(5):
-            try:
-                has = page.evaluate("""() => {
-                    const d = document.querySelector('[role="dialog"]');
-                    return d ? true : false;
-                }""")
-                if not has:
-                    log("Done! No dialog.")
-                    break
-                log(f"Dialog - clicking Next ({attempt+1})")
-                click_next(page)
+        # ===== HANDLE RECAPTCHA FLOW =====
+        # Step 1: "Help us confirm it's you" dialog with "Next" button
+        # Click Next -> reCAPTCHA loads
+        log("Phase 1: Clicking Next to trigger reCAPTCHA...")
+        for i in range(5):
+            if has_dialog(page):
+                click_next_btn(page)
+                log(f"  Clicked Next ({i+1})")
                 time.sleep(5)
                 ss(page)
-            except: break
-        
-        # NOW: Look for reCAPTCHA iframe and click it
-        log("Looking for reCAPTCHA...")
-        rc = click_recaptcha(page)
-        if rc:
-            log("reCAPTCHA solved! Clicking Next...")
-            click_next(page)
+            else:
+                break
+
+        # Step 2: Now reCAPTCHA iframe should be visible, click the box
+        log("Phase 2: Looking for reCAPTCHA box...")
+        if click_recaptcha_box(page):
+            log("✅ reCAPTCHA checked! Clicking Next...")
+            click_next_btn(page)
             time.sleep(5)
             ss(page)
-            # Check if we need to click Next again (image challenge)
-            has2 = page.evaluate("""() => {
-                const d = document.querySelector('[role="dialog"]');
-                return d ? true : false;
-            }""")
-            if not has2:
-                log("Form submitted!")
-            else:
-                log("Second dialog - clicking Next...")
-                click_next(page)
+
+            # Check if image challenge appeared
+            if has_dialog(page):
+                log("Image challenge - clicking Next anyway...")
+                click_next_btn(page)
                 time.sleep(5)
                 ss(page)
+            else:
+                log("✅ Form submitted after reCAPTCHA!")
         else:
-            log("No reCAPTCHA found")
-            # Try clicking Next again just in case
-            click_next(page)
+            log("No reCAPTCHA found, trying Next once more...")
+            click_next_btn(page)
             time.sleep(5)
             ss(page)
 
