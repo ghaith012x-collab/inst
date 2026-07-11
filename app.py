@@ -60,17 +60,67 @@ def run_signup():
         page.on("dialog", lambda d: d.dismiss())
         apply_stealth(page)
 
-        # GEN CREDS - use realistic gmail (temp domains blocked by IG)
+        # ═══════════════════════════════════════════════
+        #  STEP 1: Get temp email from hi2.in
+        # ═══════════════════════════════════════════════
+        log("📧 Getting temp email from hi2.in...")
+        page.goto('https://hi2.in/', timeout=30000, wait_until='domcontentloaded')
+        try: page.wait_for_load_state('networkidle', timeout=15000)
+        except: pass
+        time.sleep(3)
+        ss(page)
+
+        # Click the "Generate" button to create a temp email
+        try:
+            gen_btn = page.locator('button:has-text("Generate"), button:has-text("generate"), div:has-text("Generate")').first
+            gen_btn.click(timeout=5000)
+            log("  👆 Clicked Generate")
+            time.sleep(3)
+        except:
+            log("  ⚠️ Could not click Generate, trying fallback...")
+            # Try clicking by text
+            page.evaluate("""() => {
+                const btns = document.querySelectorAll('button, div, span');
+                for (const btn of btns) {
+                    if (btn.textContent.includes('Generate') && btn.offsetParent !== null) {
+                        btn.click(); return;
+                    }
+                }
+            }""")
+            time.sleep(3)
+        ss(page)
+
+        # Extract the email address from the page
+        email = ""
+        for attempt in range(5):
+            try:
+                # Look for email in various elements
+                email = page.evaluate("""() => {
+                    const body = document.body.innerText;
+                    const match = body.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}/);
+                    return match ? match[0] : '';
+                }""")
+                if email and '@' in email:
+                    break
+            except: pass
+            time.sleep(1)
+        
+        if not email or '@' not in email:
+            email = f"{''.join(random.choices(string.ascii_lowercase, k=12))}@gmail.com"
+            log(f"  ⚠️ Could not get temp email, using gmail: {email}")
+        else:
+            log(f"  ✅ Temp email: {email}")
+
+        # ═══════════════════════════════════════════════
+        #  STEP 2: Open Instagram signup in same page
+        # ═══════════════════════════════════════════════
         fname = random.choice(['Alex','Jordan','Casey','Riley','Morgan','Taylor','Jamie','Avery','Quinn','Skyler','Drew','Reese'])
         lname = random.choice(['Smith','Jones','Brown','Davis','Lee','Cruz','Wang','Kim','Patel','Garcia','Miller','Wilson'])
         full_name = f"{fname} {lname}"
-        local = f"{fname.lower()}.{lname.lower()}{random.randint(100,999)}"
-        email = f"{local}@gmail.com"
         uname = f"{fname.lower()}{lname.lower()}{random.randint(1000,99999)}"
         pwd = ''.join(random.choices(string.ascii_letters+string.digits+'!@#$', k=14))
         log(f"📋 name={full_name} user={uname} email={email}")
 
-        # LOAD PAGE
         log("── Loading Instagram ──")
         page.goto('https://www.instagram.com/accounts/emailsignup/', timeout=30000, wait_until='domcontentloaded')
         try: page.wait_for_load_state('networkidle', timeout=15000)
@@ -78,7 +128,6 @@ def run_signup():
         time.sleep(3)
         ss(page)
 
-        # Accept cookies
         for text in ["Allow all cookies","Accept All","Accept","Allow","I accept"]:
             try:
                 btn = page.get_by_role("button", name=text, exact=False)
@@ -88,7 +137,6 @@ def run_signup():
         time.sleep(2)
         ss(page)
 
-        # Get CSRF
         csrf = page.evaluate("() => (document.cookie.match(/csrftoken=([^;]+)/)||[])[1] || ''")
         log(f"  🔑 CSRF: {csrf[:20]}...")
 
@@ -143,7 +191,9 @@ def run_signup():
                 log(f"  ✅ {label.split()[1]}: {val}")
         ss(page)
 
-        # SUBMIT VIA API
+        # ═══════════════════════════════════════════════
+        #  STEP 3: Submit via API
+        # ═══════════════════════════════════════════════
         log("── Submitting via API ──")
         ts2 = int(time.time())
         enc_pwd = f"#PWD_INSTAGRAM_BROWSER:0:{ts2}:{pwd}"
@@ -166,22 +216,109 @@ def run_signup():
         body_str = str(result['body'])
         log(f"    body: {body_str[:300]}")
         account_created = '"account_created":true' in body_str
-        needs_code = 'force_sign_up_code' in body_str
 
-        # If verification code needed, try UI path
-        if needs_code:
-            log("  🔐 Verificaton code required! Using UI path...")
-            # Click Submit in UI to trigger the verification dialog
+        # ═══════════════════════════════════════════════
+        #  STEP 4: Submit via UI (triggers email)
+        # ═══════════════════════════════════════════════
+        log("── Clicking Submit in UI ──")
+        page.evaluate("""() => {
+            const btns = document.querySelectorAll('[role="button"]');
+            for (const btn of btns) {
+                if (btn.textContent.includes('Submit')) { btn.click(); return; }
+            }
+        }""")
+        time.sleep(5)
+        ss(page)
+
+        # ═══════════════════════════════════════════════
+        #  STEP 5: Check hi2.in for verification code
+        # ═══════════════════════════════════════════════
+        log("📧 Checking hi2.in for verification email...")
+        verification_code = None
+        
+        # Go back to hi2.in 
+        page.goto('https://hi2.in/', timeout=30000, wait_until='domcontentloaded')
+        time.sleep(3)
+        try: page.wait_for_load_state('networkidle', timeout=15000)
+        except: pass
+        
+        # Wait for email to arrive
+        for attempt in range(12):
+            try:
+                # Get the page text - look for verification code
+                page_text = page.evaluate("() => document.body.innerText")
+                log(f"  📄 Checking hi2.in... ({attempt+1}/12)")
+                
+                # Look for 5-6 digit codes
+                codes = re.findall(r'\b(\d{5,6})\b', page_text)
+                if codes:
+                    verification_code = codes[0]
+                    log(f"  ✅ Found code: {verification_code}")
+                    break
+                
+                # Refresh the page
+                page.reload(timeout=30000, wait_until='domcontentloaded')
+                time.sleep(3)
+                ss(page)
+            except Exception as e:
+                log(f"  ⚠️ Check error: {e}")
+                time.sleep(5)
+        
+        if not verification_code:
+            log("  ⚠️ No verification code found on hi2.in")
+            # Try clicking around to see if more emails load
             page.evaluate("""() => {
-                const btns = document.querySelectorAll('[role="button"]');
+                const btns = document.querySelectorAll('button, div, span');
                 for (const btn of btns) {
-                    if (btn.textContent.includes('Submit')) { btn.click(); return; }
+                    if (btn.textContent.includes('More') && btn.offsetParent !== null) {
+                        btn.click(); return;
+                    }
                 }
             }""")
-            time.sleep(5)
-            ss(page)
+            time.sleep(3)
+            page_text = page.evaluate("() => document.body.innerText")
+            codes = re.findall(r'\b(\d{5,6})\b', page_text)
+            if codes:
+                verification_code = codes[0]
+                log(f"  ✅ Found code after clicking More: {verification_code}")
 
-            # Handle verification dialog - try to bypass
+        # ═══════════════════════════════════════════════
+        #  STEP 6: Enter verification code on Instagram
+        # ═══════════════════════════════════════════════
+        if verification_code:
+            log(f"  🔑 Going back to Instagram to enter code: {verification_code}")
+            page.goto('https://www.instagram.com/accounts/emailsignup/', timeout=30000, wait_until='domcontentloaded')
+            time.sleep(3)
+            ss(page)
+            
+            # Try to enter the code via API
+            log("── Submitting verification code via API ──")
+            try:
+                code_result = page.evaluate("""(args) => {
+                    const [csrf, code] = args;
+                    const fd = new URLSearchParams();
+                    fd.append('code', code);
+                    fd.append('device_id', '');
+                    return fetch('/api/v1/web/accounts/web_create_ajax/confirm_code/', {
+                        method: 'POST',
+                        headers: {'X-CSRFToken': csrf, 'X-Instagram-AJAX': '1', 'Content-Type': 'application/x-www-form-urlencoded'},
+                        body: fd, credentials: 'same-origin',
+                    }).then(r => r.text().then(t => ({status: r.status, body: t})));
+                }""", [csrf, verification_code])
+                log(f"  📡 Code API: {code_result['status']} - {str(code_result['body'])[:200]}")
+                if '"account_created":true' in str(code_result['body']):
+                    account_created = True
+                    log("✅ ACCOUNT CREATED!")
+                time.sleep(3)
+                ss(page)
+            except Exception as e:
+                log(f"  ⚠️ Code API error: {e}")
+
+        # ═══════════════════════════════════════════════
+        #  STEP 7: Handle verification dialog (UI)
+        # ═══════════════════════════════════════════════
+        if not account_created:
+            log("── Handling verification dialog ──")
             for attempt in range(8):
                 try:
                     has_dialog = page.evaluate("""() => {
@@ -192,17 +329,14 @@ def run_signup():
                         log("  ✅ No more verification dialog!")
                         break
                     
-                    # Try to click Next button via JS
                     clicked = page.evaluate("""() => {
                         const btns = document.querySelectorAll('[role="button"]');
                         for (const btn of btns) {
                             if (btn.textContent.includes('Next')) {
                                 btn.removeAttribute('aria-disabled');
-                                btn.click();
-                                return true;
+                                btn.click(); return true;
                             }
                         }
-                        // Try div with role button
                         const divs = document.querySelectorAll('div[role="button"]');
                         for (const div of divs) {
                             if (div.textContent.includes('Next')) {
@@ -212,26 +346,14 @@ def run_signup():
                         }
                         return false;
                     }""")
-                    log(f"  🔓 Verification attempt {attempt+1}: {'Clicked Next' if clicked else 'No Next found'}")
-                    time.sleep(4)
-                    ss(page)
+                    log(f"  🔓 Attempt {attempt+1}: {'Clicked Next' if clicked else 'No Next'}")
+                    time.sleep(4); ss(page)
                 except Exception as e:
-                    log(f"  ⚠️ Verification error: {e}")
-                    break
+                    log(f"  ⚠️ Error: {e}"); break
 
-        # If no code needed or API says account created, do UI submit as well
-        if not account_created:
-            log("── UI Submit fallback ──")
-            page.evaluate("""() => {
-                const btns = document.querySelectorAll('[role="button"]');
-                for (const btn of btns) {
-                    if (btn.textContent.includes('Submit')) { btn.click(); return; }
-                }
-            }""")
-            time.sleep(8)
-            ss(page)
-
-        # Username retry
+        # ═══════════════════════════════════════════════
+        #  STEP 8: Username retry
+        # ═══════════════════════════════════════════════
         for retry in range(5):
             try:
                 bt = page.locator('body').inner_text()
@@ -257,7 +379,9 @@ def run_signup():
             }""")
             time.sleep(8); ss(page)
 
-        # FINAL
+        # ═══════════════════════════════════════════════
+        #  FINAL
+        # ═══════════════════════════════════════════════
         time.sleep(5)
         ss(page)
         cur = page.url
@@ -276,6 +400,7 @@ def run_signup():
                 'email': email, 'username': uname, 'password': pwd,
                 'full_name': full_name, 
                 'status': 'success' if is_ok else 'needs_verification',
+                'verification_code': verification_code or '',
                 'final_url': cur[:120],
             }
         log(f"🏁 Done: {uname} | success={is_ok}")
