@@ -356,11 +356,16 @@ def select_dob(page):
 
     log(f"  ⚠️ DOB native elements not found. Trying all-visible-inputs fallback...")
     
-    # Last resort: fill every visible text/num input with DOB values in order
+    # Last resort: fill every visible text/num/search input with DOB values
     try:
-        text_inputs = page.locator('input[type="text"]:visible, input:not([type]):visible, input[type="number"]:visible')
+        text_inputs = page.locator(
+            'input[type="text"]:visible, '
+            'input:not([type]):visible, '
+            'input[type="number"]:visible, '
+            'input[type="search"]:visible'
+        )
         count_ti = text_inputs.count()
-        log(f"  🔍 All-visible text inputs: {count_ti}")
+        log(f"  🔍 All-visible text/num/search inputs: {count_ti}")
         dob_vals = [str(month), str(day), str(year)]
         for i in range(min(count_ti, 3)):
             try:
@@ -566,9 +571,26 @@ def run_signup():
         latest_screenshot = page.screenshot(type='jpeg', quality=70)
 
         # ═══════════════════════════════════════════════════
-        #  STEP 3: Password → Next
+        #  STEP 3: Date of Birth → Next (BEFORE password!)
         # ═══════════════════════════════════════════════════
-        log("── Step 3: Password ──")
+        log("── Step 3: Date of Birth ──")
+        select_dob(page)
+
+        human_delay()
+        click_button(page, [
+            'button[type="submit"]',
+            'button:has-text("Next")',
+            'button:has-text("Continue")',
+        ], 'Next (step 3 - DOB)')
+
+        time.sleep(3)
+        accept_cookies(page)
+        latest_screenshot = page.screenshot(type='jpeg', quality=70)
+
+        # ═══════════════════════════════════════════════════
+        #  STEP 4: Password → Next
+        # ═══════════════════════════════════════════════════
+        log("── Step 4: Password ──")
         fill_field(page, [
             'input[name="password"]',
             'input[aria-label="Password"]',
@@ -581,27 +603,9 @@ def run_signup():
             'button[type="submit"]',
             'button:has-text("Next")',
             'button:has-text("Continue")',
-        ], 'Next (step 3)')
-
-        time.sleep(3)
-        accept_cookies(page)
-        latest_screenshot = page.screenshot(type='jpeg', quality=70)
-
-        # ═══════════════════════════════════════════════════
-        #  STEP 4: Date of Birth → Next
-        # ═══════════════════════════════════════════════════
-        log("── Step 4: Date of Birth ──")
-        select_dob(page)
-
-        human_delay()
-        click_button(page, [
-            'button[type="submit"]',
-            'button:has-text("Next")',
-            'button:has-text("Continue")',
             'button:has-text("Sign up")',
             'button:has-text("Sign Up")',
-            'div[role="button"]:has-text("Next")',
-        ], 'Next (step 4 - DOB)')
+        ], 'Next (step 4)')
 
         time.sleep(4)
         accept_cookies(page)
