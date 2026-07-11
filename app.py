@@ -37,10 +37,13 @@ def create_temp_email():
         if domain_resp.status_code != 200:
             return None, None, None, None
         domains = domain_resp.json().get("hydra:member", [])
-        domain = domains[0]["domain"] if domains else "@mail.tm"
+        if not domains:
+            return None, None, None, None
+        domain = domains[0]["domain"]
         local_part = ''.join(random.choices(string.ascii_lowercase, k=10))
-        email = f"{local_part}{domain}"
+        email = f"{local_part}@{domain}"
         pwd = "TempPass123!"
+        log(f"  Using domain: {domain}")
         resp = requests.post(f"{MAILTM_API}/accounts", json={"address": email, "password": pwd}, timeout=10)
         if resp.status_code == 201:
             token_resp = requests.post(f"{MAILTM_API}/token", json={"address": email, "password": pwd}, timeout=10)
@@ -49,6 +52,7 @@ def create_temp_email():
                 account_id = resp.json().get("id", "")
                 log(f"  ✅ Temp inbox: {email}")
                 return email, token, account_id, pwd
+        log(f"  ⚠️ mail.tm API error: {resp.status_code}")
         return None, None, None, None
     except Exception as e:
         log(f"  ⚠️ mail.tm: {e}")
@@ -166,26 +170,23 @@ def type_slow(locator, text):
     time.sleep(0.1)
     locator.type(text, delay=random.randint(50, 100))
 
-def click_button_by_text(page, texts, label="button"):
-    for text in texts:
-        try:
-            btn = page.get_by_role("button", name=text, exact=False)
-            if btn.count() > 0 and btn.first.is_visible():
-                btn.first.click(timeout=5000)
-                log(f"  👆 Clicked '{text}'")
-                time.sleep(0.5)
-                return True
-        except: pass
-    # Also try div[role=button]
-    for text in texts:
-        try:
-            btn = page.locator(f'div[role="button"]:has-text("{text}")')
-            if btn.count() > 0 and btn.first.is_visible():
-                btn.first.click(timeout=5000)
-                log(f"  👆 Clicked div[role=button] '{text}'")
-                time.sleep(0.5)
-                return True
-        except: pass
+def click_div_button(page, text, label="button"):
+    try:
+        btn = page.locator(f'div[role="button"]:has-text("{text}"):not([aria-disabled="true"])')
+        if btn.count() > 0 and btn.first.is_visible():
+            btn.first.click(timeout=5000)
+            log(f"  👆 Clicked '{text}'")
+            time.sleep(0.5)
+            return True
+    except: pass
+    try:
+        btn = page.get_by_role("button", name=text, exact=False)
+        if btn.count() > 0 and btn.first.is_visible():
+            btn.first.click(timeout=5000)
+            log(f"  👆 Clicked role=button '{text}'")
+            time.sleep(0.5)
+            return True
+    except: pass
     log(f"  ❌ Could not click {label}")
     return False
 
@@ -240,8 +241,9 @@ def run_signup():
         log("📧 Creating temp email inbox...")
         email, mail_token, account_id, mail_password = create_temp_email()
         if not email:
-            email = f"{''.join(random.choices(string.ascii_lowercase, k=10))}@mail.tm"
-            log(f"  Using simple email: {email}")
+            # Fallback - use a Gmail-like format (won't receive emails but form may accept)
+            email = f"{''.join(random.choices(string.ascii_lowercase, k=10))}@gmail.com"
+            log(f"  Using gmail format: {email}")
 
         # ── Generate credentials ──
         first_names = ['Alex','Jordan','Casey','Riley','Morgan','Taylor','Jamie','Avery','Quinn','Skyler','Drew','Reese']
@@ -269,13 +271,13 @@ def run_signup():
             latest_screenshot = page.screenshot(type='jpeg', quality=70)
 
         # ═══════════════════════════════════════════════
-        #  FILL ALL FIELDS
+        #  FILL ALL FIELDS BY INDEX
         # ═══════════════════════════════════════════════
         all_inputs = page.locator('input:visible')
         ic = all_inputs.count()
         log(f"  🔍 Found {ic} visible inputs")
 
-        # Email (input 0)
+        # Input 0: Email
         type_slow(all_inputs.nth(0), email)
         log(f"  ✅ Email: {email}")
         human_delay()
@@ -363,13 +365,12 @@ def run_signup():
         #  CLICK SUBMIT
         # ═══════════════════════════════════════════════
         log("── Clicking Submit ──")
-
-        click_button_by_text(page, ["Submit", "Sign up", "Sign Up", "Create account"], "Submit")
+        click_div_button(page, "Submit", "Submit")
 
         # ═══════════════════════════════════════════════
         #  WAIT AND CHECK FOR ERRORS/VERIFICATION
         # ═══════════════════════════════════════════════
-        time.sleep(5)
+        time.sleep(6)
         with lock:
             latest_screenshot = page.screenshot(type='jpeg', quality=70)
 
@@ -377,31 +378,28 @@ def run_signup():
         log(f"📄 URL after submit: {current_url[:120]}")
 
         # ═══════════════════════════════════════════════
-        #  CHECK FOR USERNAME TAKEN ERROR → Try again
+        #  HANDLE USERNAME TAKEN ERROR
         # ═══════════════════════════════════════════════
-        if page_contains(page, ["not available", "already taken", "username is invalid", "Input Username"]):
-            log("  ⚠️ Username issue detected! Generating new username...")
+        if page_contains(page, ["not available", "already taken"]):
+            log("  ⚠️ Username taken! Generating new one...")
             username = f"{full_name.replace(' ','').lower()}{random.randint(100, 99999)}"
-            log(f"  🔄 New username: {username}")
-            # Use JavaScript to re-enable and fill the username field
-            page.evaluate("""(newUsername) => {
-                    const inputs = document.querySelectorAll('input');
-                    for (const inp of inputs) {
-                        if (inp.type === 'search' || inp.getAttribute('aria-label') === 'Username') {
-                            inp.disabled = false;
-                            const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
-                                window.HTMLInputElement.prototype, 'value'
-                            ).set;
-                            nativeInputValueSetter.call(inp, newUsername);
-                            inp.dispatchEvent(new Event('input', { bubbles: true }));
-                            inp.dispatchEvent(new Event('change', { bubbles: true }));
-                            break;
-                        }
+            log(f"  🔄 New: {username}")
+            page.evaluate("""(nu) => {
+                const inputs = document.querySelectorAll('input');
+                for (const inp of inputs) {
+                    if (inp.type === 'search' || inp.getAttribute('aria-label') === 'Username') {
+                        inp.disabled = false;
+                        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                        setter.call(inp, nu);
+                        inp.dispatchEvent(new Event('input', { bubbles: true }));
+                        inp.dispatchEvent(new Event('change', { bubbles: true }));
+                        break;
                     }
-                }""", username)
+                }
+            }""", username)
             log(f"  ✅ JS-set username: {username}")
             human_delay()
-            click_button_by_text(page, ["Submit", "Sign up", "Sign Up"], "Submit (retry)")
+            click_div_button(page, "Submit", "Submit (retry)")
             time.sleep(5)
             with lock:
                 latest_screenshot = page.screenshot(type='jpeg', quality=70)
@@ -409,37 +407,37 @@ def run_signup():
             log(f"📄 URL after retry: {current_url[:120]}")
 
         # ═══════════════════════════════════════════════
-        #  CHECK FOR VERIFICATION CHALLENGE
+        #  DETECT VERIFICATION CHALLENGE
         # ═══════════════════════════════════════════════
-        is_verify = page_contains(page, ["confirm it's you", "Help us confirm", "verification", "confirmation step", "security check"])
+        is_verify = page_contains(page, ["confirm it's you", "Help us confirm", "confirmation step", "security check"])
+        verification_code = None
+
         if is_verify:
             log("  🔒 Instagram verification challenge detected!")
-            log("  👆 Clicking Next to proceed through verification...")
-            click_button_by_text(page, ["Next", "Continue", "Confirm"], "Verification Next")
-            time.sleep(3)
-            with lock:
-                latest_screenshot = page.screenshot(type='jpeg', quality=70)
-
-        # ═══════════════════════════════════════════════
-        #  CHECK FOR EMAIL VERIFICATION CODE
-        # ═══════════════════════════════════════════════
-        if is_verify or page_contains(page, ["code", "email", "sent you"]):
             log("  📧 Checking for verification email...")
             verification_code = check_mailtm_inbox(mail_token, account_id, timeout=45) if mail_token else None
 
             if verification_code:
                 log(f"  🔑 Entering code: {verification_code}")
-                vi = page.locator('input:visible')
-                if vi.count() > 0:
-                    type_slow(vi.first, verification_code)
-                    log("  ✅ Code entered")
-                human_delay()
-                click_button_by_text(page, ["Next", "Confirm", "Verify", "Done", "Submit", "Continue"], "Verify code")
-                time.sleep(5)
+                # Find the code input field (usually a text input in the dialog)
+                try:
+                    # The verification dialog likely has a text input for the code
+                    code_input = page.locator('[role="dialog"] input:visible')
+                    if code_input.count() == 0:
+                        code_input = page.locator('input:visible')
+                    if code_input.count() > 0:
+                        type_slow(code_input.first, verification_code)
+                        log("  ✅ Code entered")
+                        human_delay()
+                        # Click Next - should be enabled now
+                        click_div_button(page, "Next", "Next after code")
+                        time.sleep(5)
+                except Exception as e:
+                    log(f"  ⚠️ Code entry error: {e}")
             else:
-                log("  ⚠️ No verification code received, proceeding...")
-                # Try clicking next anyway
-                click_button_by_text(page, ["Next", "Continue", "Skip"], "Skip verification")
+                log("  ⚠️ No verification code received")
+                # Try to proceed anyway
+                click_div_button(page, "Next", "Next (no code)")
                 time.sleep(3)
 
         # ═══════════════════════════════════════════════
@@ -468,27 +466,17 @@ def run_signup():
             is_success = True
             log("✅ Navigated away from signup page!")
 
-        if is_success:
-            with lock:
-                latest_credentials = {
-                    'email': email,
-                    'username': username,
-                    'password': password,
-                    'full_name': full_name,
-                    'status': 'success',
-                    'final_url': current_url[:120],
-                }
-        else:
-            with lock:
-                latest_credentials = {
-                    'email': email,
-                    'username': username,
-                    'password': password,
-                    'full_name': full_name,
-                    'status': 'completed',
-                    'verification_triggered': is_verify,
-                    'final_url': current_url[:120],
-                }
+        with lock:
+            latest_credentials = {
+                'email': email,
+                'username': username,
+                'password': password,
+                'full_name': full_name,
+                'status': 'success' if is_success else 'completed',
+                'verification_triggered': is_verify,
+                'verification_code': verification_code or '',
+                'final_url': current_url[:120],
+            }
 
         log(f"🏁 Done: {username} / {email} | success={is_success}")
         p.stop()
