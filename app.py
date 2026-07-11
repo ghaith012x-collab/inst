@@ -81,13 +81,23 @@ def run_signup():
         p = sync_playwright().start()
         log("Starting browser...")
 
-        browser = p.chromium.launch(
-            proxy=None,
-            args=['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage',
-                  '--disable-gpu','--disable-blink-features=AutomationControlled',
-                  '--disable-infobars','--window-size=1366,768'],
-            headless=True,
-        )
+        # Load NopeCHA extension for automatic captcha solving
+        ext_path = '/app/nopecha_ext'
+        if not os.path.exists(ext_path):
+            ext_path = '/home/user/nopecha_ext'
+        if not os.path.exists(ext_path):
+            ext_path = None
+            log("No extension found, running without")
+
+        args = ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage',
+                '--disable-gpu','--disable-blink-features=AutomationControlled',
+                '--disable-infobars','--window-size=1366,768']
+        if ext_path:
+            args.append(f'--disable-extensions-except={ext_path}')
+            args.append(f'--load-extension={ext_path}')
+            log(f"Loaded NopeCHA extension")
+
+        browser = p.chromium.launch(proxy=None, args=args, headless=True)
         ctx = browser.new_context(
             viewport={'width':1366,'height':768},
             user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36',
@@ -174,14 +184,17 @@ def run_signup():
             const btns = document.querySelectorAll('[role="button"]');
             for (const b of btns) { if (b.textContent.includes('Submit')) { b.click(); return; } }
         }""")
-        time.sleep(8)
+        time.sleep(10)
         ss(page)
 
-        # 5. HANDLE CAPTCHA - try clicking Next + reCAPTCHA
-        log("Handling captcha...")
-        for loop in range(3):
+        # 5. NopeCHA handles reCAPTCHA automatically
+        # Just wait for it with Next clicks
+        log("Waiting for captcha solving...")
+        for loop in range(10):
             has = page.evaluate("""() => { const d = document.querySelector('[role="dialog"]'); return d ? true : false; }""")
-            if not has: break
+            if not has:
+                log("No dialog - submitted!")
+                break
             page.evaluate("""() => {
                 const btns = document.querySelectorAll('[role="button"]');
                 for (const b of btns) {
@@ -193,40 +206,6 @@ def run_signup():
             log(f"Next {loop+1}")
             time.sleep(5)
             ss(page)
-
-        # Try to find and click reCAPTCHA checkbox
-        log("Looking for reCAPTCHA...")
-        for _ in range(15):
-            found = False
-            for i in range(page.locator('iframe').count()):
-                try:
-                    fr = page.locator('iframe').nth(i).content_frame()
-                    if fr:
-                        anchor = fr.locator('#recaptcha-anchor')
-                        if anchor.count() > 0:
-                            anchor.first.click(timeout=3000)
-                            time.sleep(2)
-                            if anchor.first.get_attribute('aria-checked') == 'true':
-                                log("reCAPTCHA clicked!")
-                                found = True
-                                break
-                except: pass
-            if found:
-                # Click Next after captcha
-                time.sleep(3)
-                page.evaluate("""() => {
-                    const btns = document.querySelectorAll('[role="button"]');
-                    for (const b of btns) {
-                        if (b.textContent.trim().toLowerCase() === 'next') {
-                            b.removeAttribute('aria-disabled'); b.click(); return;
-                        }
-                    }
-                }""")
-                log("Clicked Next after captcha")
-                time.sleep(5)
-                ss(page)
-                break
-            time.sleep(1)
 
         # 6. CHECK FOR VERIFICATION CODE
         log("Checking for verification code...")
