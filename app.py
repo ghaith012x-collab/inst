@@ -28,22 +28,13 @@ def run_signup():
         p = sync_playwright().start()
         log("Starting browser...")
 
-        # Load NopeCHA extension for auto captcha solving
-        ext_path = '/app/nopecha_ext'
-        if not os.path.exists(ext_path):
-            ext_path = '/home/user/nopecha_ext'
-        if not os.path.exists(ext_path):
-            ext_path = None
-
-        args = ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage',
-                '--disable-gpu','--disable-blink-features=AutomationControlled',
-                '--disable-infobars','--window-size=1366,768']
-        if ext_path:
-            args.append(f'--disable-extensions-except={ext_path}')
-            args.append(f'--load-extension={ext_path}')
-            log("Loaded NopeCHA extension")
-
-        browser = p.chromium.launch(proxy=None, args=args, headless=True)
+        browser = p.chromium.launch(
+            proxy=None,
+            args=['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage',
+                  '--disable-gpu','--disable-blink-features=AutomationControlled',
+                  '--disable-infobars','--window-size=1366,768'],
+            headless=True,
+        )
         ctx = browser.new_context(
             viewport={'width':1366,'height':768},
             user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36',
@@ -57,11 +48,11 @@ def run_signup():
         window.chrome = {runtime: {}};
         try { delete navigator.__proto__.webdriver; } catch(e) {}""")
 
-        # GEN CREDS (use gmail style - more trusted)
+        # GEN CREDS
         fn = random.choice(['Alex','Jordan','Casey','Riley','Morgan','Taylor','Jamie','Avery','Quinn','Skyler','Drew','Reese'])
         ln = random.choice(['Smith','Jones','Brown','Davis','Lee','Cruz','Wang','Kim','Patel','Garcia','Miller','Wilson'])
         full = f"{fn} {ln}"
-        local = f"{fn.lower()}.{ln.lower()}{random.randint(100,999)}"
+        local = f"{fn.lower()}{random.randint(100,999)}"
         email = f"{local}@gmail.com"
         uname = f"{fn.lower()}{ln.lower()}{random.randint(1000,99999)}"
         pwd = ''.join(random.choices(string.ascii_letters+string.digits+'!@#$', k=14))
@@ -120,7 +111,7 @@ def run_signup():
                 time.sleep(0.2); page.keyboard.press('Enter'); time.sleep(0.3)
         ss(page)
 
-        # SUBMIT VIA UI
+        # SUBMIT VIA UI - first time
         log("Clicking Submit...")
         page.evaluate("""() => {
             const btns = document.querySelectorAll('[role="button"]');
@@ -129,17 +120,25 @@ def run_signup():
         time.sleep(10)
         ss(page)
 
-        # NopeCHA will auto-solve reCAPTCHA
-        # Just click Next buttons as needed
-        log("NopeCHA solving...")
-        for i in range(10):
-            has = page.evaluate("""() => {
-                const d = document.querySelector('[role="dialog"]');
-                return d ? true : false;
-            }""")
-            if not has:
-                log("No dialog - submitted!")
-                break
+        # Try to handle security dialog by clicking the checkbox
+        log("Looking for reCAPTCHA checkbox...")
+        for _ in range(15):
+            found = False
+            for i in range(page.locator('iframe').count()):
+                try:
+                    fr = page.locator('iframe').nth(i).content_frame()
+                    if fr:
+                        anchor = fr.locator('#recaptcha-anchor')
+                        if anchor.count() > 0:
+                            anchor.first.click(timeout=3000)
+                            time.sleep(2)
+                            if anchor.first.get_attribute('aria-checked') == 'true':
+                                log("reCAPTCHA checked!")
+                                found = True
+                                break
+                except: pass
+            if found: break
+            # Also try to click Next in the main dialog
             page.evaluate("""() => {
                 const btns = document.querySelectorAll('[role="button"]');
                 for (const b of btns) {
@@ -148,7 +147,21 @@ def run_signup():
                     }
                 }
             }""")
-            log(f"Next {i+1}")
+            log("Clicked Next...")
+            time.sleep(5)
+            ss(page)
+
+        # Wait for any verification
+        log("Waiting for verification...")
+        for i in range(3):
+            page.evaluate("""() => {
+                const btns = document.querySelectorAll('[role="button"]');
+                for (const b of btns) {
+                    if (b.textContent.trim().toLowerCase() === 'next') {
+                        b.removeAttribute('aria-disabled'); b.click(); return;
+                    }
+                }
+            }""")
             time.sleep(5)
             ss(page)
 
@@ -186,11 +199,9 @@ def run_signup():
         try:
             bt = page.locator('body').inner_text()
             for kw in ["welcome","let's go","start exploring","logged in","find people","save your login"]:
-                if kw.lower() in bt.lower():
-                    ok = True; log("SUCCESS!"); break
+                if kw.lower() in bt.lower(): ok = True; log("SUCCESS!"); break
         except: pass
-        if "emailsignup" not in cur and "signup" not in cur:
-            ok = True; log("Navigated away!")
+        if "emailsignup" not in cur and "signup" not in cur: ok = True; log("Navigated away!")
 
         with lock:
             latest_credentials = {
@@ -218,9 +229,9 @@ def stream():
         while True:
             with lock:
                 if latest_screenshot:
-                    yield (b'--frame\r\n'
-                           b'Content-Type: image/jpeg\r\n\r\n'
-                           + latest_screenshot + b'\r\n')
+                    yield (b'--frame\\r\\n'
+                           b'Content-Type: image/jpeg\\r\\n\\r\\n'
+                           + latest_screenshot + b'\\r\\n')
             time.sleep(1)
     return Response(gen(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
