@@ -10,24 +10,26 @@ status_log = []
 lock = threading.Lock()
 
 def log(msg):
-    line = f"[{time.strftime('%H:%M:%S')}] {msg}"
-    print(line, file=sys.stderr, flush=True)
-    with lock: status_log.append(line)
-    if len(status_log) > 100: status_log.pop(0)
+    with lock:
+        status_log.append(msg)
+        if len(status_log) > 100: status_log.pop(0)
+    print(f"[{time.strftime('%H:%M:%S')}] {msg}", file=sys.stderr, flush=True)
 
 def ss(page):
-    with lock:
-        global latest_screenshot
-        try: latest_screenshot = page.screenshot(type='jpeg', quality=70)
-        except: pass
+    global latest_screenshot
+    try:
+        with lock:
+            latest_screenshot = page.screenshot(type='jpeg', quality=60)
+    except:
+        pass
 
 def run_signup():
     global latest_screenshot, latest_credentials
     try:
         from playwright.sync_api import sync_playwright
         p = sync_playwright().start()
-        log("Starting browser...")
-
+        log("👤 Starting browser...")
+        
         browser = p.chromium.launch(
             proxy=None,
             args=['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage',
@@ -42,101 +44,111 @@ def run_signup():
         )
         page = ctx.new_page()
         page.on("dialog", lambda d: d.dismiss())
-        page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => false});Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});Object.defineProperty(navigator, 'languages', {get: () => ['en-US','en']});window.chrome = {runtime: {}};try { delete navigator.__proto__.webdriver; } catch(e) {}")
+        page.add_init_script("""
+        Object.defineProperty(navigator, 'webdriver', {get: () => false});
+        Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});
+        Object.defineProperty(navigator, 'languages', {get: () => ['en-US','en']});
+        window.chrome = {runtime: {}};
+        try { delete navigator.__proto__.webdriver; } catch(e) {}
+        """)
 
-        # 1. Get hi2.in email - scroll to see the displayed email  
-        log("Getting hi2.in email...")
-        page.goto('https://hi2.in/', timeout=30000, wait_until='domcontentloaded')
-        try: page.wait_for_load_state('networkidle', timeout=20000)
-        except: pass
-        time.sleep(4)
-        ss(page)
-        
-        page.evaluate("""() => {
-            const all = document.querySelectorAll('button, div, span, a');
-            for (const el of all) { if (el.textContent.trim().toLowerCase() === 'generate' && el.offsetParent !== null) { el.click(); return; } }
-        }""")
-        log("Clicked Generate")
-        time.sleep(5)
-        ss(page)
-        
-        email = ''
-        for i in range(15):
-            email = page.evaluate("""() => {
-                const t = document.body.innerText;
-                const m = t.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
-                if (m && m[0].length > 6 && m[0].includes('@')) return m[0];
-                const el = document.querySelector('.mailpanel, .genmail, .cubold');
-                if (el) {
-                    const m2 = el.textContent.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
-                    if (m2) return m2[0];
+        # 1. Get hi2.in email
+        log("📧 Getting hi2.in email...")
+        for attempt in range(3):
+            page.goto('https://hi2.in/', timeout=30000, wait_until='domcontentloaded')
+            time.sleep(4)
+            # Click Generate
+            clicks = page.evaluate("""
+                () => { const els = document.querySelectorAll('button, div, span'); 
+                for (const el of els) { if (el.textContent.trim().toLowerCase() === 'generate' && el.offsetParent !== null) { el.click(); return true; } } return false; }
+            """)
+            log(f"Generate clicked: {clicks}")
+            time.sleep(5)
+            
+            # Get email - check full page text
+            email = page.evaluate("""
+                () => {
+                    const t = document.body.innerText;
+                    const m = t.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+                    if (m && m[0].includes('@') && m[0].length > 6 && !m[0].includes('{{')) return m[0];
+                    const panel = document.querySelector('.mailpanel, .genmail, .contentmail');
+                    if (panel) {
+                        const m2 = panel.textContent.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+                        if (m2) return m2[0];
+                    }
+                    return '';
                 }
-                return '';
-            }""")
-            if email and '@' in email:
-                log(f"Email: {email}")
+            """)
+            if email and '@' in email and len(email) > 6 and '{{' not in email:
                 break
-            time.sleep(1)
+            time.sleep(2)
+        
         if not email or '@' not in email:
-            email = f"{''.join(random.choices(string.ascii_lowercase, k=12))}@gmail.com"
-            log(f"Gmail: {email}")
+            email = f"{''.join(random.choices(string.ascii_lowercase, k=10))}@gmail.com"
+            log(f"⚠️ Using gmail: {email}")
+        else:
+            log(f"✅ Email: {email}")
+        
+        ss(page)
 
-        # 2. Gen creds
+        # 2. Generate credentials
         fn = random.choice(['Alex','Jordan','Casey','Riley','Morgan','Taylor','Jamie','Avery','Quinn','Skyler','Drew','Reese'])
         ln = random.choice(['Smith','Jones','Brown','Davis','Lee','Cruz','Wang','Kim','Patel','Garcia','Miller','Wilson'])
         full = f"{fn} {ln}"
         uname = f"{fn.lower()}{ln.lower()}{random.randint(1000,99999)}"
         pwd = ''.join(random.choices(string.ascii_letters+string.digits+'!@#$', k=14))
-        log(f"name={full} user={uname}")
+        log(f"📋 {full} | {uname}")
 
-        # 3. Instagram
-        log("Loading Instagram...")
+        # 3. Instagram signup
+        log("📷 Loading Instagram...")
         page.goto('https://www.instagram.com/accounts/emailsignup/', timeout=30000, wait_until='domcontentloaded')
         try: page.wait_for_load_state('networkidle', timeout=15000)
         except: pass
         time.sleep(4)
         ss(page)
 
-        for c in ["Allow all cookies","Accept All","Accept","Allow","I accept"]:
+        for c in ["Allow all cookies","Accept All","Accept","Allow"]:
             try:
                 btn = page.get_by_role("button", name=c, exact=False)
                 if btn.count() > 0 and btn.first.is_visible():
-                    btn.first.click(timeout=3000); log("Cookies"); time.sleep(0.5); break
+                    btn.first.click(timeout=3000)
+                    time.sleep(0.5)
+                    break
             except: continue
         time.sleep(2)
-        ss(page)
 
         csrf = page.evaluate("() => (document.cookie.match(/csrftoken=([^;]+)/)||[])[1] || ''")
-        log(f"CSRF: {csrf[:20]}...")
+        log(f"🔑 CSRF: {csrf[:20]}")
 
+        # Fill fields
         inp = page.locator('input:visible')
         ic = inp.count()
 
         def fill(el, text):
-            el.click(timeout=5000); time.sleep(0.15)
+            el.click(timeout=5000); time.sleep(0.2)
             el.fill('', timeout=3000); time.sleep(0.1)
             el.type(text, delay=random.randint(40,90))
 
-        fill(inp.nth(0), email); log("Email"); time.sleep(0.8)
+        fill(inp.nth(0), email); log("Email"); time.sleep(0.7)
         for i in range(ic):
             if inp.nth(i).get_attribute('type') == 'password':
                 fill(inp.nth(i), pwd); log("Password"); break
-        time.sleep(0.8)
+        time.sleep(0.7)
         tf = 0
         for i in range(ic):
             if inp.nth(i).get_attribute('type') == 'text':
                 if tf == 0: tf = 1
                 elif tf == 1: fill(inp.nth(i), full); log("Name"); tf = 2; break
-        time.sleep(0.8)
+        time.sleep(0.7)
         for i in range(ic):
             if inp.nth(i).get_attribute('type') == 'search':
                 fill(inp.nth(i), uname); log("Username"); break
-        time.sleep(0.8)
+        time.sleep(0.7)
         ss(page)
 
         yr = random.randint(1991, 2005); mo = random.randint(1, 12); dy = random.randint(1, 28 if mo == 2 else 30)
         mn = ['','January','February','March','April','May','June','July','August','September','October','November','December'][mo]
-        log(f"DOB: {mn} {dy}, {yr}")
+        log(f"🎂 {mn} {dy}, {yr}")
         for label, val in [("Select Month", mn), ("Select Day", str(dy)), ("Select Year", str(yr))]:
             cb = page.locator(f'[role="combobox"][aria-label="{label}"]')
             if cb.count() > 0:
@@ -145,11 +157,11 @@ def run_signup():
                 time.sleep(0.2); page.keyboard.press('Enter'); time.sleep(0.3)
         ss(page)
 
-        # 4. Submit via API  
-        log("Submitting via API...")
-        t = int(time.time())
-        ep = f"#PWD_INSTAGRAM_BROWSER:0:{t}:{pwd}"
-
+        # 4. Submit via API
+        log("🚀 Submitting via API...")
+        ts = int(time.time())
+        ep = f"#PWD_INSTAGRAM_BROWSER:0:{ts}:{pwd}"
+        
         result = page.evaluate("""(args) => {
             const [c, e, u, p, fn, d, m, y] = args;
             const fd = new URLSearchParams();
@@ -164,102 +176,78 @@ def run_signup():
             }).then(r => r.text().then(t => ({status:r.status, body:t})));
         }""", [csrf, email, uname, ep, full, str(dy), str(mo), str(yr)])
 
-        log(f"API: {result['status']}")
-        body_str = str(result['body'])
-        log(f"Body: {body_str[:200]}")
+        log(f"API: {result['status']} - {str(result['body'])[:200]}")
+        
+        acc_created = '"account_created":true' in str(result['body'])
+        needs_code = 'force_sign_up_code' in str(result['body']) or 'email_code' in str(result['body'])
 
-        account_created = '"account_created":true' in body_str
-        needs_code = 'force_sign_up_code' in body_str
+        # Save credentials
+        latest_credentials = {
+            'email': email, 'username': uname, 'password': pwd,
+            'full_name': full, 'status': 'success' if acc_created else 'needs_verification',
+        }
 
-        # Save creds
-        with lock:
-            latest_credentials = {
-                'email': email, 'username': uname, 'password': pwd,
-                'full_name': full, 'status': 'success' if account_created else 'code_needed',
-            }
-
-        # 5. If code needed, go check hi2.in inbox
-        code = None
+        # 5. If code needed, try to get it from hi2.in
         if needs_code:
-            log("Verification needed! Checking hi2.in inbox...")
+            log("🔐 Email verification required! Checking hi2.in inbox...")
             page.goto('https://hi2.in/', timeout=30000, wait_until='domcontentloaded')
-            try: page.wait_for_load_state('networkidle', timeout=20000)
-            except: pass
             time.sleep(3)
             
-            # Scroll to the mail panel area
-            page.evaluate("""() => {
-                const panels = document.querySelector('.mailpanel, .contentmail, .genmail');
-                if (panels) panels.scrollIntoView();
-                window.scrollTo(0, document.body.scrollHeight);
-            }""")
-            time.sleep(2)
-            ss(page)
-
-            for check in range(12):
-                page.evaluate("""() => {
-                    const el = document.querySelector('.mailpanel, .contentmail, .genmail');
-                    if (el) el.scrollIntoView();
-                    window.scrollTo(0, document.body.scrollHeight);
-                }""")
+            for check in range(15):
+                # Scroll to refresh mail panel
+                page.evaluate("""
+                    () => {
+                        window.scrollTo(0, document.body.scrollHeight);
+                        const mp = document.querySelector('.mailpanel, .contentmail, .genmail');
+                        if (mp) mp.scrollIntoView({behavior:'instant', block:'end'});
+                    }
+                """)
                 time.sleep(2)
+                
                 txt = page.evaluate("() => document.body.innerText")
                 codes = re.findall(r'\b(\d{5,6})\b', txt)
                 if codes:
                     code = codes[0]
-                    log(f"FOUND CODE: {code}")
+                    log(f"✅ CODE: {code}")
+                    latest_credentials['verification_code'] = code
+                    
+                    # Submit code
+                    page.goto('https://www.instagram.com/accounts/emailsignup/', timeout=30000, wait_until='domcontentloaded')
+                    time.sleep(3)
+                    csrf2 = page.evaluate("() => (document.cookie.match(/csrftoken=([^;]+)/)||[])[1] || ''")
+                    
+                    cr = page.evaluate("""(args) => {
+                        const [c, code] = args;
+                        const fd = new URLSearchParams();
+                        fd.append('code',code); fd.append('device_id','');
+                        return fetch('/api/v1/web/accounts/web_create_ajax/confirm_code/', {
+                            method:'POST', credentials:'same-origin',
+                            headers:{'X-CSRFToken':c, 'X-Instagram-AJAX':'1', 'Content-Type':'application/x-www-form-urlencoded'},
+                            body:fd,
+                        }).then(r => r.text().then(t => ({status:r.status, body:t})));
+                    }""", [csrf2, code])
+                    log(f"Code API: {cr['status']} - {str(cr['body'])[:200]}")
+                    if '"account_created":true' in str(cr['body']):
+                        acc_created = True
+                        latest_credentials['status'] = 'success'
+                        log("✅ ACCOUNT CREATED!")
                     break
-                log(f"Check ({check+1}/12)")
+                
+                log(f"📬 Check ({check+1}/15)")
                 page.reload(timeout=30000, wait_until='domcontentloaded')
                 time.sleep(3)
-                ss(page)
+        
+        if not acc_created:
+            log("⚠️ Account needs manual verification")
 
-            if code:
-                log(f"Submitting code: {code}")
-                page.goto('https://www.instagram.com/accounts/emailsignup/', timeout=30000, wait_until='domcontentloaded')
-                time.sleep(3)
-                ss(page)
-                csrf2 = page.evaluate("() => (document.cookie.match(/csrftoken=([^;]+)/)||[])[1] || ''")
-                cr = page.evaluate("""(args) => {
-                    const [c, code] = args;
-                    const fd = new URLSearchParams();
-                    fd.append('code',code); fd.append('device_id','');
-                    return fetch('/api/v1/web/accounts/web_create_ajax/confirm_code/', {
-                        method:'POST', credentials:'same-origin',
-                        headers:{'X-CSRFToken':c, 'X-Instagram-AJAX':'1', 'Content-Type':'application/x-www-form-urlencoded'},
-                        body:fd,
-                    }).then(r => r.text().then(t => ({status:r.status, body:t})));
-                }""", [csrf2, code])
-                log(f"Code API: {cr['status']} - {str(cr['body'])[:200]}")
-                if '"account_created":true' in str(cr['body']):
-                    account_created = True
-                    log("ACCOUNT CREATED!")
-                    with lock:
-                        latest_credentials['status'] = 'success'
-                time.sleep(5)
-                ss(page)
-            else:
-                log("No code found - account may need email verification")
-
-        # 6. Final
-        time.sleep(5); ss(page)
-        cur = page.url
-        log(f"Final: {cur[:120]}")
-        with lock:
-            latest_credentials.update({
-                'verification_code': code or '',
-                'final_url': cur[:120],
-                'status': 'success' if account_created else latest_credentials.get('status', 'code_needed'),
-            })
-        log(f"Done: {uname} | success={account_created}")
+        ss(page)
+        log(f"🏁 Done: {uname}")
         p.stop()
 
     except Exception as e:
-        log(f"CRASH: {e}")
+        log(f"💥 {e}")
         import traceback
-        log(f"{traceback.format_exc()[-300:]}")
-        with lock:
-            latest_credentials = {'error': str(e)}
+        log(traceback.format_exc()[-300:])
 
 @app.route('/')
 def index():
@@ -271,15 +259,13 @@ def stream():
         while True:
             with lock:
                 if latest_screenshot:
-                    yield (b'--frame\r\n'
-                           b'Content-Type: image/jpeg\r\n\r\n'
-                           + latest_screenshot + b'\r\n')
+                    yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + latest_screenshot + b'\r\n')
             time.sleep(1)
     return Response(gen(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 @app.route('/status')
 def status():
-    return jsonify({'alive': True, 'port': PORT, 'log': status_log[-30:]})
+    with lock: return jsonify({'alive': True, 'log': status_log[-20:]})
 
 @app.route('/create', methods=['POST'])
 def create():
@@ -288,7 +274,7 @@ def create():
     return jsonify({'status': 'started'})
 
 @app.route('/credentials')
-def creds():
+def credentials():
     with lock: return jsonify(latest_credentials)
 
 @app.route('/logs')
@@ -296,5 +282,5 @@ def logs():
     with lock: return jsonify(status_log[-50:])
 
 if __name__ == '__main__':
-    log(f"STARTING ON PORT {PORT}")
+    log(f"🚀 ON PORT {PORT}")
     app.run(host='0.0.0.0', port=PORT, threaded=True)
