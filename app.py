@@ -42,7 +42,6 @@ def get_email(page):
             const t = document.body.innerText;
             const m = t.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
             if (m && m[0].length > 6 && m[0].includes('@') && !m[0].includes('random@') && !m[0].includes('{{')) return m[0];
-            // Also check input values
             const inputs = document.querySelectorAll('input[type="text"], input[type="email"]');
             for (const inp of inputs) {
                 if (inp.value && inp.value.includes('@')) return inp.value;
@@ -56,27 +55,7 @@ def get_email(page):
         time.sleep(1)
     return None
 
-def click_recaptcha_checkbox(page):
-    """Click the reCAPTCHA 'I am not a robot' checkbox inside any iframe."""
-    for _ in range(20):
-        total = page.locator('iframe').count()
-        for i in range(total):
-            try:
-                fr = page.locator('iframe').nth(i).content_frame()
-                if fr:
-                    anchor = fr.locator('#recaptcha-anchor')
-                    if anchor.count() > 0:
-                        anchor.first.click(timeout=3000)
-                        time.sleep(2)
-                        if anchor.first.get_attribute('aria-checked') == 'true':
-                            log("  ✅ Checkbox clicked!")
-                            return True
-            except: pass
-        time.sleep(1)
-    return False
-
-def check_inbox_for_code(page):
-    """Check hi2.in for verification code."""
+def check_inbox(page):
     page.goto('https://hi2.in/', timeout=30000, wait_until='domcontentloaded')
     time.sleep(3)
     page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)")
@@ -86,7 +65,6 @@ def check_inbox_for_code(page):
         txt = page.evaluate("() => document.body.innerText")
         codes = re.findall(r'\b(\d{5,6})\b', txt)
         if codes:
-            log(f"Code: {codes[0]}")
             return codes[0]
         log(f"Check ({a+1}/15)")
         page.reload(timeout=30000, wait_until='domcontentloaded')
@@ -123,13 +101,13 @@ def run_signup():
         window.chrome = {runtime: {}};
         try { delete navigator.__proto__.webdriver; } catch(e) {}""")
 
-        # 1. GET EMAIL FROM hi2.in
+        # 1. GET EMAIL
         email = get_email(page)
         if not email:
             email = f"{''.join(random.choices(string.ascii_lowercase, k=12))}@gmail.com"
             log(f"Gmail: {email}")
 
-        # 2. GENERATE CREDS
+        # 2. CREDS
         fn = random.choice(['Alex','Jordan','Casey','Riley','Morgan','Taylor','Jamie','Avery','Quinn','Skyler','Drew','Reese'])
         ln = random.choice(['Smith','Jones','Brown','Davis','Lee','Cruz','Wang','Kim','Patel','Garcia','Miller','Wilson'])
         full = f"{fn} {ln}"
@@ -137,7 +115,7 @@ def run_signup():
         pwd = ''.join(random.choices(string.ascii_letters+string.digits+'!@#$', k=14))
         log(f"name={full} user={uname} email={email}")
 
-        # 3. LOAD INSTAGRAM
+        # 3. INSTAGRAM
         log("Loading Instagram...")
         page.goto('https://www.instagram.com/accounts/emailsignup/', timeout=30000, wait_until='domcontentloaded')
         try: page.wait_for_load_state('networkidle', timeout=15000)
@@ -162,7 +140,6 @@ def run_signup():
             el.fill('', timeout=3000); time.sleep(0.1)
             el.type(text, delay=random.randint(40,90))
 
-        # 4. FILL ALL FIELDS
         fill(inp.nth(0), email); log("Email"); time.sleep(0.8)
         for i in range(ic):
             if inp.nth(i).get_attribute('type') == 'password':
@@ -180,7 +157,6 @@ def run_signup():
         time.sleep(0.8)
         ss(page)
 
-        # 5. DOB
         yr = random.randint(1991, 2005); mo = random.randint(1, 12); dy = random.randint(1, 28 if mo == 2 else 30)
         mn = ['','January','February','March','April','May','June','July','August','September','October','November','December'][mo]
         log(f"DOB: {mn} {dy}, {yr}")
@@ -192,74 +168,73 @@ def run_signup():
                 time.sleep(0.2); page.keyboard.press('Enter'); time.sleep(0.3)
         ss(page)
 
-        # 6. CLICK SUBMIT
+        # 4. SUBMIT
         log("Clicking Submit...")
         page.evaluate("""() => {
             const btns = document.querySelectorAll('[role="button"]');
             for (const b of btns) { if (b.textContent.includes('Submit')) { b.click(); return; } }
         }""")
-        time.sleep(10)
+        time.sleep(8)
         ss(page)
 
-        # 7. HANDLE SECURITY DIALOG + reCAPTCHA
-        log("Security dialog handling...")
-        for i in range(3):
+        # 5. HANDLE CAPTCHA - try clicking Next + reCAPTCHA
+        log("Handling captcha...")
+        for loop in range(3):
             has = page.evaluate("""() => { const d = document.querySelector('[role="dialog"]'); return d ? true : false; }""")
-            if not has:
-                log("No dialog - submitted!")
+            if not has: break
+            page.evaluate("""() => {
+                const btns = document.querySelectorAll('[role="button"]');
+                for (const b of btns) {
+                    if (b.textContent.trim().toLowerCase() === 'next') {
+                        b.removeAttribute('aria-disabled'); b.click(); return;
+                    }
+                }
+            }""")
+            log(f"Next {loop+1}")
+            time.sleep(5)
+            ss(page)
+
+        # Try to find and click reCAPTCHA checkbox
+        log("Looking for reCAPTCHA...")
+        for _ in range(15):
+            found = False
+            for i in range(page.locator('iframe').count()):
+                try:
+                    fr = page.locator('iframe').nth(i).content_frame()
+                    if fr:
+                        anchor = fr.locator('#recaptcha-anchor')
+                        if anchor.count() > 0:
+                            anchor.first.click(timeout=3000)
+                            time.sleep(2)
+                            if anchor.first.get_attribute('aria-checked') == 'true':
+                                log("reCAPTCHA clicked!")
+                                found = True
+                                break
+                except: pass
+            if found:
+                # Click Next after captcha
+                time.sleep(3)
+                page.evaluate("""() => {
+                    const btns = document.querySelectorAll('[role="button"]');
+                    for (const b of btns) {
+                        if (b.textContent.trim().toLowerCase() === 'next') {
+                            b.removeAttribute('aria-disabled'); b.click(); return;
+                        }
+                    }
+                }""")
+                log("Clicked Next after captcha")
+                time.sleep(5)
+                ss(page)
                 break
-            # Click Next to trigger reCAPTCHA
-            page.evaluate("""() => {
-                const btns = document.querySelectorAll('[role="button"]');
-                for (const b of btns) {
-                    if (b.textContent.trim().toLowerCase() === 'next') {
-                        b.removeAttribute('aria-disabled'); b.click(); return;
-                    }
-                }
-            }""")
-            log(f"Clicked Next ({i+1})")
-            time.sleep(5)
-            ss(page)
+            time.sleep(1)
 
-        # 8. CLICK reCAPTCHA CHECKBOX (the empty box)
-        log("Clicking reCAPTCHA checkbox...")
-        clicked = click_recaptcha_checkbox(page)
-        if clicked:
-            log("✅ reCAPTCHA checkbox clicked!")
-            time.sleep(5)
-            ss(page)
-            # Click Next after reCAPTCHA
-            page.evaluate("""() => {
-                const btns = document.querySelectorAll('[role="button"]');
-                for (const b of btns) {
-                    if (b.textContent.trim().toLowerCase() === 'next') {
-                        b.removeAttribute('aria-disabled'); b.click(); return;
-                    }
-                }
-            }""")
-            log("Clicked Next after captcha")
-            time.sleep(5)
-            ss(page)
-        else:
-            log("No reCAPTCHA found, clicking Next...")
-            page.evaluate("""() => {
-                const btns = document.querySelectorAll('[role="button"]');
-                for (const b of btns) {
-                    if (b.textContent.trim().toLowerCase() === 'next') {
-                        b.removeAttribute('aria-disabled'); b.click(); return;
-                    }
-                }
-            }""")
-            time.sleep(5)
-            ss(page)
+        # 6. CHECK FOR VERIFICATION CODE
+        log("Checking for verification code...")
+        code = check_inbox(page)
 
-        # 9. CHECK hi2.in FOR VERIFICATION CODE
-        log("Checking hi2.in for verification code...")
-        code = check_inbox_for_code(page)
-
-        # 10. ENTER CODE IF FOUND
+        # 7. ENTER CODE
         if code:
-            log(f"Entering code: {code}")
+            log(f"Got code: {code}")
             page.goto('https://www.instagram.com/accounts/emailsignup/', timeout=30000, wait_until='domcontentloaded')
             time.sleep(3)
             ss(page)
@@ -268,7 +243,6 @@ def run_signup():
                 fill(inp2.first, code)
                 log("Code entered!")
                 time.sleep(1)
-            # Click Next/Submit
             page.evaluate("""() => {
                 const btns = document.querySelectorAll('[role="button"]');
                 for (const b of btns) {
@@ -279,19 +253,8 @@ def run_signup():
             }""")
             time.sleep(5)
             ss(page)
-            # Maybe click Next again
-            page.evaluate("""() => {
-                const btns = document.querySelectorAll('[role="button"]');
-                for (const b of btns) {
-                    if (b.textContent.trim().toLowerCase() === 'next') {
-                        b.removeAttribute('aria-disabled'); b.click(); return;
-                    }
-                }
-            }""")
-            time.sleep(5)
-            ss(page)
 
-        # 11. USERNAME RETRY
+        # 8. USERNAME RETRY
         for r in range(5):
             try:
                 bt = page.locator('body').inner_text()
