@@ -18,11 +18,10 @@ RUN python3 -m playwright install chromium
 RUN python3 -m playwright install-deps chromium 2>/dev/null || true
 
 COPY . .
-RUN chmod +x start.sh
 
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=5 \
     CMD curl -s -o /dev/null http://localhost:${PORT:-8080}/status || true
 
-CMD ["./start.sh"]
+CMD python app.py

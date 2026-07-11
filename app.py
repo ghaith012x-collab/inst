@@ -21,55 +21,15 @@ def ss(page):
         try: latest_screenshot = page.screenshot(type='jpeg', quality=70)
         except: pass
 
-def stealth(page):
-    page.add_init_script("""Object.defineProperty(navigator, 'webdriver', {get: () => false});Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});Object.defineProperty(navigator, 'languages', {get: () => ['en-US','en']});window.chrome = {runtime: {}};const origQuery = window.navigator.permissions.query;window.navigator.permissions.query = (p) => (p.name === 'notifications' ? Promise.resolve({state: 'prompt'}) : origQuery(p));try { delete navigator.__proto__.webdriver; } catch(e) {}Object.defineProperty(navigator, 'hardwareConcurrency', {get: () => 8});""")
-
-def has_dialog(page):
-    return page.evaluate("""() => { const d = document.querySelector('[role="dialog"]'); return d ? true : false; }""")
-
-def click_next_btn(page):
-    return page.evaluate("""() => {
-        const btns = document.querySelectorAll('[role="button"]');
-        for (const b of btns) {
-            const txt = b.textContent.trim().toLowerCase();
-            if (txt === 'next') {
-                b.removeAttribute('aria-disabled');
-                b.click(); return true;
-            }
-        }
-        return false;
-    }""")
-
-def click_recaptcha_box(page):
-    """Find the reCAPTCHA iframe and click the checkbox inside it."""
-    for _ in range(20):
-        iframes = page.locator('iframe')
-        for i in range(iframes.count()):
-            try:
-                src = (iframes.nth(i).get_attribute('src') or '').lower()
-                title = (iframes.nth(i).get_attribute('title') or '').lower()
-                if 'recaptcha' in src or 'recaptcha' in title:
-                    frame = iframes.nth(i).content_frame()
-                    if frame:
-                        anchor = frame.locator('#recaptcha-anchor')
-                        if anchor.count() > 0:
-                            log("  Found recaptcha box, clicking...")
-                            anchor.first.click(timeout=5000)
-                            time.sleep(2)
-                            checked = anchor.first.get_attribute('aria-checked')
-                            if checked == 'true':
-                                log("  ✅ Checkbox checked!")
-                                return True
-            except: pass
-        time.sleep(1)
-    return False
-
 def get_email(page):
+    """Get temp email from hi2.in"""
     page.goto('https://hi2.in/', timeout=30000, wait_until='domcontentloaded')
-    try: page.wait_for_load_state('networkidle', timeout=20000)
+    try: page.wait_for_load_state('networkidle', timeout=15000)
     except: pass
-    time.sleep(5)
+    time.sleep(4)
     ss(page)
+    
+    # Click Generate
     page.evaluate("""() => {
         const all = document.querySelectorAll('button, div, span, a');
         for (const el of all) {
@@ -80,30 +40,34 @@ def get_email(page):
     log("Clicked Generate")
     time.sleep(5)
     ss(page)
+    
+    # Extract real email - wait for it to appear
     for i in range(15):
         email = page.evaluate("""() => {
+            // Look for email pattern in the whole page
             const t = document.body.innerText;
-            // More specific: look for a proper email with a valid domain
-            const m = t.match(/(?<![a-zA-Z])[a-zA-Z]{3,}@[a-zA-Z][a-zA-Z0-9.-]+\.(com|net|org|info|io|co|in|me|app|dev|xyz|online|space)\b/);
-            if (m) return m[0];
-            // Check input values/placeholders
+            const m = t.match(/[a-zA-Z]{3,15}@[a-zA-Z0-9.-]+\\.(?:com|net|org|info|io|co|in|me|app|dev|xyz|online|site)\b/);
+            if (m && m[0].length > 6 && m[0].includes('@')) return m[0];
+            
+            // Check input fields
             const inputs = document.querySelectorAll('input');
             for (const inp of inputs) {
-                const val = inp.value || inp.placeholder || '';
-                const m2 = val.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
-                if (m2 && m2[0].length > 5) return m2[0];
+                const v = inp.value || inp.placeholder || '';
+                const m2 = v.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+                if (m2 && m2[0].length > 6) return m2[0];
             }
-            // Check specific elements
-            const els = document.querySelectorAll('.address, .mailpanel, .genmail, [class*="address"], [class*="email"], [class*="mail"]');
-            for (const el of els) {
-                const txt = el.textContent || '';
-                const m2 = txt.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
-                if (m2 && m2[0].length > 5) return m2[0];
+            
+            // Check specific address elements
+            const addrEls = document.querySelectorAll('[class*="address"], [class*="email"], [class*="mail"], .genmail, .mailpanel');
+            for (const el of addrEls) {
+                const v = el.textContent || '';
+                const m2 = v.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+                if (m2 && m2[0].length > 6) return m2[0];
             }
             return '';
         }""")
-        if email and '@' in email and len(email) > 8:
-            log(f"Got: {email}")
+        if email and '@' in email and len(email) > 8 and not 'random@' in email and not '{{' in email:
+            log(f"Got email: {email}")
             return email
         log(f"Wait... ({i+1}/15)")
         time.sleep(1)
@@ -115,11 +79,17 @@ def run_signup():
         from playwright.sync_api import sync_playwright
         p = sync_playwright().start()
         log("Starting browser...")
+        
+        # Load NopeCHA extension for automatic CAPTCHA solving
         browser = p.chromium.launch(
             proxy=None,
-            args=['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage',
-                  '--disable-gpu','--disable-blink-features=AutomationControlled',
-                  '--disable-infobars','--window-size=1366,768'],
+            args=[
+                '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
+                '--disable-gpu', '--disable-blink-features=AutomationControlled',
+                '--disable-infobars', '--window-size=1366,768',
+                f'--disable-extensions-except=/home/user/nopecha_ext',
+                f'--load-extension=/home/user/nopecha_ext',
+            ],
             headless=True,
         )
         ctx = browser.new_context(
@@ -129,13 +99,21 @@ def run_signup():
         )
         page = ctx.new_page()
         page.on("dialog", lambda d: d.dismiss())
-        stealth(page)
+        
+        # Stealth is less needed with NopeCHA but keep basics
+        page.add_init_script("""Object.defineProperty(navigator, 'webdriver', {get: () => false});
+        Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});
+        Object.defineProperty(navigator, 'languages', {get: () => ['en-US','en']});
+        window.chrome = {runtime: {}};
+        try { delete navigator.__proto__.webdriver; } catch(e) {}""")
 
+        # ===== GET TEMP EMAIL =====
         email = get_email(page)
         if not email:
             email = f"{''.join(random.choices(string.ascii_lowercase, k=12))}@gmail.com"
             log(f"Gmail: {email}")
 
+        # ===== INSTAGRAM SIGNUP =====
         fn = random.choice(['Alex','Jordan','Casey','Riley','Morgan','Taylor','Jamie','Avery','Quinn','Skyler','Drew','Reese'])
         ln = random.choice(['Smith','Jones','Brown','Davis','Lee','Cruz','Wang','Kim','Patel','Garcia','Miller','Wilson'])
         full = f"{fn} {ln}"
@@ -200,7 +178,7 @@ def run_signup():
                 time.sleep(0.2); page.keyboard.press('Enter'); time.sleep(0.3)
         ss(page)
 
-        # SUBMIT
+        # ===== SUBMIT =====
         log("Clicking Submit...")
         page.evaluate("""() => {
             const btns = document.querySelectorAll('[role="button"]');
@@ -209,42 +187,40 @@ def run_signup():
         time.sleep(10)
         ss(page)
 
-        # ===== HANDLE RECAPTCHA FLOW =====
-        # Step 1: "Help us confirm it's you" dialog with "Next" button
-        # Click Next -> reCAPTCHA loads
-        log("Phase 1: Clicking Next to trigger reCAPTCHA...")
-        for i in range(5):
-            if has_dialog(page):
-                click_next_btn(page)
-                log(f"  Clicked Next ({i+1})")
+        # ===== NopeCHA HANDLES reCAPTCHA AUTOMATICALLY =====
+        # Just wait and click Next buttons as they appear
+        log("Waiting for NopeCHA to solve reCAPTCHA...")
+        for attempt in range(20):
+            try:
+                has = page.evaluate("""() => {
+                    const d = document.querySelector('[role="dialog"]');
+                    return d ? d.textContent.toLowerCase().includes('confirm') || d.textContent.toLowerCase().includes('security') : false;
+                }""")
+                if not has:
+                    log("No dialog - submitted!")
+                    break
+                
+                # Click Next if available
+                clicked = page.evaluate("""() => {
+                    const btns = document.querySelectorAll('[role="button"]');
+                    for (const b of btns) {
+                        const txt = b.textContent.trim().toLowerCase();
+                        if (txt === 'next') {
+                            b.removeAttribute('aria-disabled');
+                            b.click(); return true;
+                        }
+                    }
+                    return false;
+                }""")
+                if clicked:
+                    log(f"Clicked Next ({attempt+1})")
+                else:
+                    log(f"Waiting ({attempt+1})")
                 time.sleep(5)
                 ss(page)
-            else:
-                break
+            except: break
 
-        # Step 2: Now reCAPTCHA iframe should be visible, click the box
-        log("Phase 2: Looking for reCAPTCHA box...")
-        if click_recaptcha_box(page):
-            log("✅ reCAPTCHA checked! Clicking Next...")
-            click_next_btn(page)
-            time.sleep(5)
-            ss(page)
-
-            # Check if image challenge appeared
-            if has_dialog(page):
-                log("Image challenge - clicking Next anyway...")
-                click_next_btn(page)
-                time.sleep(5)
-                ss(page)
-            else:
-                log("✅ Form submitted after reCAPTCHA!")
-        else:
-            log("No reCAPTCHA found, trying Next once more...")
-            click_next_btn(page)
-            time.sleep(5)
-            ss(page)
-
-        # Username retry
+        # ===== USERNAME RETRY =====
         for r in range(5):
             try:
                 bt = page.locator('body').inner_text()
