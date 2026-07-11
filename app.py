@@ -51,14 +51,14 @@ def run_signup():
         )
         ctx = browser.new_context(
             viewport={'width':1366,'height':768},
-            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36',
             locale='en-US', timezone_id='America/New_York', color_scheme='light',
         )
         page = ctx.new_page()
         page.on("dialog", lambda d: d.dismiss())
         stealth(page)
 
-        # ============ STEP 1: GET TEMP EMAIL FROM hi2.in ============
+        # GET TEMP EMAIL FROM hi2.in
         log("Opening hi2.in...")
         page.goto('https://hi2.in/', timeout=30000, wait_until='domcontentloaded')
         try: page.wait_for_load_state('networkidle', timeout=15000)
@@ -66,35 +66,30 @@ def run_signup():
         time.sleep(4)
         ss(page)
 
-        # Click Generate - it's the first button with "Generate" text
+        # Click Generate
         page.evaluate("""() => {
-            const all = document.querySelectorAll('button, div, span, a, .genmail, .submit');
+            const all = document.querySelectorAll('button, div, span, a');
             for (const el of all) {
                 const t = el.textContent.trim().toLowerCase();
-                if ((t === 'generate' || t.includes('generate')) && el.offsetParent !== null) {
-                    el.click();
-                    return 'clicked';
+                if ((t === 'generate' || t.startsWith('generate')) && el.offsetParent !== null) {
+                    el.click(); return;
                 }
             }
-            return 'not found';
         }""")
         log("Clicked Generate")
         time.sleep(5)
         ss(page)
 
-        # Extract email from page - look for it in the address area
+        # Extract email
         email = ""
         for i in range(10):
-            # Try to find email in common patterns
             email = page.evaluate("""() => {
                 const t = document.body.innerText;
-                // Look for email pattern
-                const m = t.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}/);
+                const m = t.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
                 if (m) return m[0];
-                // Look specifically in address areas
-                const addr = document.querySelector('.address, .mailpanel, .cubold, [class*="address"], [class*="email"]');
-                if (addr) {
-                    const a = addr.innerText.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}/);
+                const el = document.querySelector('[class*="address"], [class*="email"], .mailpanel, .genmail');
+                if (el) {
+                    const a = el.innerText.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
                     if (a) return a[0];
                 }
                 return '';
@@ -102,18 +97,18 @@ def run_signup():
             if email and '@' in email:
                 log(f"Got email: {email}")
                 break
-            log(f"Waiting for email... ({i+1}/10)")
+            log(f"Waiting... ({i+1}/10)")
             time.sleep(1)
 
         if not email or '@' not in email:
             email = f"{''.join(random.choices(string.ascii_lowercase, k=12))}@gmail.com"
-            log(f"Fallback gmail: {email}")
+            log(f"Gmail fallback: {email}")
 
-        # ============ STEP 2: INSTAGRAM SIGNUP ============
+        # INSTAGRAM SIGNUP
         fn = random.choice(['Alex','Jordan','Casey','Riley','Morgan','Taylor','Jamie','Avery','Quinn','Skyler','Drew','Reese'])
         ln = random.choice(['Smith','Jones','Brown','Davis','Lee','Cruz','Wang','Kim','Patel','Garcia','Miller','Wilson'])
         full = f"{fn} {ln}"
-        uname = f"{fn.lower()}{ln.lower()}{random.randint(1000,99999)}"
+        uname = f"{fn.lower()}{ln.lower()}{random.randint(100,99999)}"
         pwd = ''.join(random.choices(string.ascii_letters+string.digits+'!@#$', k=14))
         log(f"name={full} user={uname} email={email}")
 
@@ -175,138 +170,49 @@ def run_signup():
                 time.sleep(0.2); page.keyboard.press('Enter'); time.sleep(0.3)
         ss(page)
 
-        # ============ STEP 3: SUBMIT ============
-        log("Submitting...")
-        t = int(time.time())
-        ep = f"#PWD_INSTAGRAM_BROWSER:0:{t}:{pwd}"
-
-        # API submit
-        r = page.evaluate("""(args) => {
-            const [c, e, u, p, fn, d, m, y] = args;
-            const fd = new URLSearchParams();
-            fd.append('email',e); fd.append('enc_password',p);
-            fd.append('username',u); fd.append('first_name',fn.split(' ')[0]);
-            fd.append('day',d); fd.append('month',m); fd.append('year',y);
-            fd.append('client_id',''); fd.append('seamless_login_enabled','1'); fd.append('tos_version','row');
-            return fetch('/api/v1/web/accounts/web_create_ajax/', {
-                method:'POST', credentials:'same-origin',
-                headers:{'X-CSRFToken':c, 'X-Instagram-AJAX':'1', 'Content-Type':'application/x-www-form-urlencoded'},
-                body:fd,
-            }).then(r => r.text().then(t => ({status:r.status, body:t})));
-        }""", [csrf, email, uname, ep, full, str(dy), str(mo), str(yr)])
-
-        log(f"API: {r['status']} - {str(r['body'])[:200]}")
-        acc_ok = '"account_created":true' in str(r['body'])
-
-        # UI submit
-        log("UI Submit...")
+        # SUBMIT - use UI click
+        log("Clicking Submit...")
         page.evaluate("""() => {
             const btns = document.querySelectorAll('[role="button"]');
             for (const b of btns) { if (b.textContent.includes('Submit')) { b.click(); return; } }
         }""")
-        time.sleep(6)
+        time.sleep(8)
         ss(page)
 
-        # ============ STEP 4: CHECK hi2.in FOR VERIFICATION CODE ============
-        log("Checking hi2.in inbox...")
-        code = None
-
-        page.goto('https://hi2.in/', timeout=30000, wait_until='domcontentloaded')
-        time.sleep(3)
-
-        # Scroll down to see the inbox area
-        page.evaluate("""() => {
-            window.scrollTo(0, document.body.scrollHeight);
-            // Also try to scroll to the mail panel
-            const mp = document.querySelector('.mailpanel, .contentmail, .address-list, .genmail, [class*="mail"], [class*="inbox"]');
-            if (mp) mp.scrollIntoView();
-        }""")
-        time.sleep(2)
-        ss(page)
-
-        for attempt in range(15):
+        # HANDLE CAPTCHA / SECURITY DIALOG
+        log("Checking for security dialog...")
+        for attempt in range(10):
             try:
-                # Scroll down each time to trigger lazy loading
-                page.evaluate("""() => {
-                    window.scrollTo(0, document.body.scrollHeight);
-                    // Click "More" button if present
-                    const more = document.querySelector('.more, .morebtn, [class*="more"]');
-                    if (more && more.offsetParent !== null) more.click();
+                has_dialog = page.evaluate("""() => {
+                    const d = document.querySelector('[role="dialog"]');
+                    if (!d) return 'none';
+                    const txt = d.textContent.toLowerCase();
+                    if (txt.includes('confirm') || txt.includes('security') || txt.includes('challenge')) return 'captcha';
+                    return 'other';
                 }""")
-                time.sleep(1)
-                
-                txt = page.evaluate("() => document.body.innerText")
-                log(f"Check ({attempt+1}/15)")
-                
-                # Look for Instagram verification codes
-                if 'Instagram' in txt or 'insta' in txt.lower() or 'code' in txt.lower():
-                    codes = re.findall(r'\b(\d{5,6})\b', txt)
-                    if codes:
-                        code = codes[0]
-                        log(f"Found code: {code}")
-                        break
-                
-                # Also check for any 5-6 digit codes
-                codes = re.findall(r'\b(\d{5,6})\b', txt)
-                if codes:
-                    code = codes[0]
-                    log(f"Found code: {code}")
+                log(f"Dialog {attempt+1}: {has_dialog}")
+
+                if has_dialog == 'none':
+                    log("No dialog - form submitted!")
                     break
-                    
-                page.reload(timeout=30000, wait_until='domcontentloaded')
-                time.sleep(3)
-                # Scroll down after reload
-                page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)")
-                time.sleep(1)
+
+                # Try to click Next button
+                page.evaluate("""() => {
+                    const btns = document.querySelectorAll('[role="button"]');
+                    for (const b of btns) {
+                        const txt = b.textContent.trim().toLowerCase();
+                        if (txt === 'next' || txt === 'verify' || txt === 'submit' || txt === 'confirm') {
+                            b.removeAttribute('aria-disabled');
+                            b.click(); return;
+                        }
+                    }
+                }""")
+                log(f"Clicked dialog button")
+                time.sleep(5)
                 ss(page)
-            except: time.sleep(5)
+            except: break
 
-        if not code:
-            log("No code found on hi2.in")
-
-        # ============ STEP 5: ENTER CODE ON INSTAGRAM ============
-        if code:
-            log(f"Entering code: {code}")
-            page.goto('https://www.instagram.com/accounts/emailsignup/', timeout=30000, wait_until='domcontentloaded')
-            time.sleep(3)
-            ss(page)
-
-            # Try via API
-            cr = page.evaluate("""(args) => {
-                const [c, code] = args;
-                const fd = new URLSearchParams();
-                fd.append('code',code); fd.append('device_id','');
-                return fetch('/api/v1/web/accounts/web_create_ajax/confirm_code/', {
-                    method:'POST', credentials:'same-origin',
-                    headers:{'X-CSRFToken':c, 'X-Instagram-AJAX':'1', 'Content-Type':'application/x-www-form-urlencoded'},
-                    body:fd,
-                }).then(r => r.text().then(t => ({status:r.status, body:t})));
-            }""", [csrf, code])
-            log(f"Code: {cr['status']} - {str(cr['body'])[:200]}")
-            if '"account_created":true' in str(cr['body']):
-                acc_ok = True
-                log("ACCOUNT CREATED!")
-            time.sleep(3)
-            ss(page)
-
-        # ============ STEP 6: HANDLE VERIFICATION DIALOG ============
-        if not acc_ok:
-            for a in range(6):
-                try:
-                    has = page.evaluate("""() => {
-                        const d = document.querySelector('[role="dialog"]');
-                        return d ? d.textContent.includes('confirm') || d.textContent.includes('Confirm') : false;
-                    }""")
-                    if not has: log("No dialog"); break
-                    page.evaluate("""() => {
-                        const btns = document.querySelectorAll('[role="button"]');
-                        for (const b of btns) { if (b.textContent.includes('Next')) { b.removeAttribute('aria-disabled'); b.click(); return; } }
-                    }""")
-                    log(f"Dialog {a+1}")
-                    time.sleep(4); ss(page)
-                except: break
-
-        # ============ STEP 7: USERNAME RETRY ============
+        # USERNAME RETRY
         for r in range(5):
             try:
                 bt = page.locator('body').inner_text()
@@ -332,12 +238,12 @@ def run_signup():
             }""")
             time.sleep(8); ss(page)
 
-        # ============ FINAL ============
+        # FINAL
         time.sleep(5); ss(page)
         cur = page.url
         log(f"Final URL: {cur[:120]}")
 
-        ok = acc_ok
+        ok = False
         try:
             bt = page.locator('body').inner_text()
             for kw in ["welcome","let's go","start exploring","logged in","find people","save your login","you're logged in","signed in"]:
@@ -348,9 +254,7 @@ def run_signup():
         with lock:
             latest_credentials = {
                 'email': email, 'username': uname, 'password': pwd,
-                'full_name': full,
-                'status': 'success' if ok else 'needs_verification',
-                'verification_code': code or '',
+                'full_name': full, 'status': 'success' if ok else 'needs_verification',
                 'final_url': cur[:120],
             }
         log(f"Done: {uname} | success={ok}")
