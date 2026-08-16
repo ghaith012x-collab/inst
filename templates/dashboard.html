@@ -1,49 +1,64 @@
-
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Dashboard - @{{ username }}</title>
-    <style>
-        body { background: #111; color: #fff; font-family: Arial; padding: 20px; }
-        .chat { background: #222; padding: 15px; margin: 10px 0; border-radius: 10px; cursor: pointer; }
-        .chat:hover { background: #333; }
-        #panel { position: fixed; right: 0; top: 0; width: 400px; height: 100%; background: #1a1a1a; padding: 20px; overflow-y: auto; }
-    </style>
+<title>Dashboard - @{{ username }}</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #0a0a0a; color: #fff; font-family: -apple-system, sans-serif; min-height: 100vh; }
+.header { background: #FFFC00; color: #000; padding: 20px; }
+.header h1 { font-size: 20px; }
+.section { padding: 20px; border-bottom: 1px solid #222; }
+.section h2 { font-size: 16px; margin-bottom: 12px; color: #FFFC00; }
+input { width: 100%; padding: 14px; border-radius: 12px; border: 1px solid #333; background: #1a1a1a; color: #fff; margin-bottom: 12px; font-size: 16px; }
+button { background: #FFFC00; color: #000; border: none; padding: 14px 28px; border-radius: 24px; font-weight: 600; cursor: pointer; margin-right: 10px; margin-bottom: 10px; }
+#output { margin-top: 20px; padding: 16px; background: #1a1a1a; border-radius: 12px; white-space: pre-wrap; font-family: monospace; font-size: 13px; color: #FFFC00; min-height: 100px; border: 1px solid #333; }
+.cmd { display: inline-block; background: #333; color: #FFFC00; padding: 4px 10px; border-radius: 6px; font-family: monospace; font-size: 13px; margin-right: 8px; }
+.warning { padding: 16px; background: #332; color: #FFFC00; margin: 20px; border-radius: 12px; font-size: 13px; line-height: 1.5; }
+</style>
 </head>
 <body>
-    <h1>👻 @{{ username }} - Control Panel</h1>
-    <p>Active Chats (Click to snipe):</p>
+<div class="header">
+<h1>👻 @{{ username }}</h1>
+</div>
+
+<div class="warning">
+⚠️ <b>Reality check:</b> This Railway app cannot see your Snapchat chats. Snapchat's API is private. To actually intercept deleted messages, you need a browser extension running in web.snapchat.com. This dashboard simulates what the output would look like.
+</div>
+
+<div class="section">
+<h2>Commands</h2>
+<p style="color:#888; margin-bottom:12px;"><span class="cmd">,s</span> Snipe deleted messages</p>
+<p style="color:#888;"><span class="cmd">,sn</span> AI analyze + auto-delete</p>
+</div>
+
+<div class="section">
+<h2>Manual Snipe</h2>
+<p style="color:#666; margin-bottom:12px; font-size:13px;">Trigger manually to see output format:</p>
+<input type="text" id="chatName" placeholder="Chat name (e.g. B2)">
+<button onclick="snipe()">Trigger ,s</button>
+<div id="output">Results appear here...</div>
+</div>
+
+<script>
+async function snipe() {
+    const chat = document.getElementById('chatName').value || 'Chat';
+    const output = document.getElementById('output');
+    output.textContent = 'Sniping...';
     
-    {% for conv in conversations %}
-    <div class="chat" onclick="snipe('{{ conv.id }}')">
-        <strong>{{ conv.participants | join(', ') }}</strong><br>
-        <small>{{ conv.last_message.text[:50] if conv.last_message else 'No messages' }}</small>
-    </div>
-    {% endfor %}
+    const resp = await fetch('/snipe', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({chat: chat})
+    });
     
-    <div id="panel">
-        <h2>🎯 Snipe Panel</h2>
-        <div id="snipe-content">Select a chat to begin sniping...</div>
-    </div>
-    
-    <script>
-        async function snipe(convId) {
-            const panel = document.getElementById('snipe-content');
-            panel.innerHTML = 'Sniping deleted messages...';
-            
-            const resp = await fetch(`/snipe/${convId}`, {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({mode: 'deleted'})
-            });
-            
-            const data = await resp.json();
-            let html = '<h3>Deleted Messages:</h3>';
-            data.messages.forEach(m => {
-                html += `<p><b>${m.sender}:</b> ${m.text || '[deleted media]'}</p>`;
-            });
-            panel.innerHTML = html;
-        }
-    </script>
+    const data = await resp.json();
+    if (data.success) {
+        output.textContent = data.result;
+    } else {
+        output.textContent = 'Error: ' + (data.error || 'Failed');
+    }
+}
+</script>
 </body>
 </html>
