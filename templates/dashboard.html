@@ -1,0 +1,49 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Dashboard - @{{ username }}</title>
+    <style>
+        body { background: #111; color: #fff; font-family: Arial; padding: 20px; }
+        .chat { background: #222; padding: 15px; margin: 10px 0; border-radius: 10px; cursor: pointer; }
+        .chat:hover { background: #333; }
+        #panel { position: fixed; right: 0; top: 0; width: 400px; height: 100%; background: #1a1a1a; padding: 20px; overflow-y: auto; }
+    </style>
+</head>
+<body>
+    <h1>👻 @{{ username }} - Control Panel</h1>
+    <p>Active Chats (Click to snipe):</p>
+    
+    {% for conv in conversations %}
+    <div class="chat" onclick="snipe('{{ conv.id }}')">
+        <strong>{{ conv.participants | join(', ') }}</strong><br>
+        <small>{{ conv.last_message.text[:50] if conv.last_message else 'No messages' }}</small>
+    </div>
+    {% endfor %}
+    
+    <div id="panel">
+        <h2>🎯 Snipe Panel</h2>
+        <div id="snipe-content">Select a chat to begin sniping...</div>
+    </div>
+    
+    <script>
+        async function snipe(convId) {
+            const panel = document.getElementById('snipe-content');
+            panel.innerHTML = 'Sniping deleted messages...';
+            
+            const resp = await fetch(`/snipe/${convId}`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({mode: 'deleted'})
+            });
+            
+            const data = await resp.json();
+            let html = '<h3>Deleted Messages:</h3>';
+            data.messages.forEach(m => {
+                html += `<p><b>${m.sender}:</b> ${m.text || '[deleted media]'}</p>`;
+            });
+            panel.innerHTML = html;
+        }
+    </script>
+</body>
+</html>
